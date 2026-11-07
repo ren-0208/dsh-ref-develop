@@ -1,6 +1,6 @@
 {
   "name": "@ren-0208/dsh-growth-note",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Memory and growth for DSH: distill reusable methods, lessons, knowledge, problem reviews and (optional) owner preferences from past sessions, shared globally or per workspace.",
   "license": "MIT",
@@ -8,19 +8,19 @@
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js",
-    "lib/config.js",
-    "lib/store.js",
-    "lib/prompt.js",
-    "lib/tools.js",
-    "lib/consolidate.js",
-    "lib/util.js",
+    "lib",
+    "test",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
@@ -30,6 +30,10 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
     }
   }
 }
