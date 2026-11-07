@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Memory and Growth">
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#1f2a44"/>
+  <path d="M18 44V28a6 6 0 0 1 6-6h4v22h-4a6 6 0 0 1-6-6z" fill="#8fb3ff"/>
+  <path d="M46 44V28a6 6 0 0 0-6-6h-4v22h4a6 6 0 0 0 6-6z" fill="#c9d9ff"/>
+  <path d="M32 20v24" stroke="#1f2a44" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M32 20c0-5 3.6-9 8-10" stroke="#5ce3a1" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+  <path d="M32 20c0-4.4-2.8-8-6.4-9" stroke="#5ce3a1" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+  <circle cx="40.5" cy="9.5" r="3.2" fill="#5ce3a1"/>
+  <circle cx="25" cy="10.6" r="2.6" fill="#3fc98a"/>
+</svg>

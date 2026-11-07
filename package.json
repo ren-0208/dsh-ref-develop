@@ -1,0 +1,35 @@
+{
+  "name": "@ren-0208/dsh-growth-note",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Memory and growth for DSH: distill reusable methods, lessons, knowledge, problem reviews and (optional) owner preferences from past sessions, shared globally or per workspace.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/config.js",
+    "lib/store.js",
+    "lib/prompt.js",
+    "lib/tools.js",
+    "lib/consolidate.js",
+    "lib/util.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "docs/*.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
