@@ -1,6 +1,10 @@
-# dsh-ref-devlop
+# dsh-ref-develop
 
-DSH 参考实现开发仓库。当前内容：**growth-note**（记忆与成长）插件。
+DSH 参考实现开发仓库。当前内容：**记忆与成长**（插件包名/ID `dsh-ref-develop`）。
+
+> 命名约定：仓库名、包名、插件 ID 用 `dsh-ref-develop`；界面上叫「记忆与成长」；
+> 内部数据目录与 HTTP 前缀沿用功能名 `growth-note`（`$DSH_HOME/growth-note/`、`/growth-note/api/*`），
+> 它们属于实现细节，不影响安装与使用。
 
 ## 定位
 
@@ -19,7 +23,8 @@ growth-note 让 DSH 从**已经发生的会话**里提炼可复用的方法、�
   主人画像 `preference`（需显式开启）、项目状态 `state`。
 - **按当前问题召回**：摘要不是固定全量清单，而是按本轮用户消息的关键词 + 强度打分挑 top-k。
 - **可生长、可衰减**：置信度、使用次数、证据数量决定强度，强度按半衰期衰减；同一教训出现多次可升级为方法。
-- **全局 / 单工作区**：一个开关切换存储根；切换时把活跃条目迁移过去，旧库保留。
+- **全局 / 单工作区**：一个开关切换存储根，单工作区可在设置页从已登记工作区里选；
+  每个工作区记忆各自独立，全局 ↔ 工作区切换时把活跃条目迁移过去，旧库保留。
 - **设置页**：DSH「设置 → 记忆与成长」里可视化查看、筛选、编辑、删除、导出。
 - **命令**：会话里输入 `/growth` 查看状态、检索、切换范围、导出等。
 - **零运行时依赖**：只用 Node 内置模块，无构建步骤。
@@ -29,7 +34,7 @@ growth-note 让 DSH 从**已经发生的会话**里提炼可复用的方法、�
 | 路径 | 用途 |
 | --- | --- |
 | `package.json` | DSH bundle 清单（`dsh.bundle.patch` 指向组合补丁，`exports` 暴露 client） |
-| `cordis.patch.yml` | 把 `growth-note` 插入 DSH 组合 |
+| `cordis.patch.yml` | 把 `dsh-ref-develop` 插入 DSH 组合 |
 | `lib/index.js` | 插件入口：注入摘要、注册工具/命令/路由、监听回合事件 |
 | `lib/config.js` | 配置项、默认值与运行时校验（无外部依赖） |
 | `lib/entry.js` | 条目模型：归一化、相似度、合并、强度衰减、教训升级 |
@@ -54,21 +59,21 @@ growth-note 让 DSH 从**已经发生的会话**里提炼可复用的方法、�
 在 DSH 中把本目录作为本地 bundle 安装（推荐，安装后改代码立即生效）：
 
 ```text
-plugin_manager action=install_bundle target=<本仓库绝对路径>
+plugin_manager action=install_bundle target=D:\文件夹库\人工智能小组作业\dsh-ref-devlop
 ```
 
 或者手动组合：在 profile 的 `cordis.patch.yml` 追加
 
 ```yaml
 - insert:
-    - id: growth-note
-      name: '@ren-0208/dsh-growth-note'
+    - id: dsh-ref-develop
+      name: '@ren-0208/dsh-ref-develop'
       config:
         scope: global
 ```
 
 安装后无需重启即可用：设置页会出现「记忆与成长」，会话里 `growth_status` 可调用。
-卸载：`plugin_manager action=remove_bundle target=@ren-0208/dsh-growth-note`（记忆目录不会被删除）。
+卸载：`plugin_manager action=remove_bundle target=@ren-0208/dsh-ref-develop`（记忆目录不会被删除）。
 
 ## 用法
 
@@ -88,7 +93,9 @@ plugin_manager action=install_bundle target=<本仓库绝对路径>
 
 DSH「设置 → 记忆与成长」：
 
-- 范围切换（全局 / 单工作区）、个性化开关、自动记录 / 自动提炼开关；
+- 范围切换（全局 / 单工作区）；选「单工作区」后出现**工作区下拉框**，选项来自本机已登记的
+  工作区（标题 + 路径），不需要手填路径；也可以选「沿用当前会话目录」；
+- 个性化开关、自动记录 / 自动提炼开关；
 - 提炼间隔、摘要预算、条数上限；
 - 「立即总结」把当前会话已有笔记马上提炼一次；
 - 条目列表：按类型筛选、关键词搜索、查看置信度/使用次数、编辑、删除；
@@ -113,17 +120,15 @@ DSH「设置 → 记忆与成长」：
 
 - **全局记忆**（默认 `scope: global`）：所有工作区共享一份成长记忆，路径 `$DSH_HOME/growth-note/global`。
   适合「跨项目的通用方法、读书笔记、个人偏好」。
-- **单工作区记忆**（`scope: workspace`）：每个工作区各一份，路径 `<工作区>/.growth-note`。
+- **单工作区记忆**（`scope: workspace`）：**每个工作区各一份、互不共享**，路径 `<工作区>/.growth-note`。
   适合「只跟这个项目有关的状态、约定、踩过的坑」。
+  在设置页里从已登记工作区下拉选择；`workspacePath` 为空时使用当前会话目录。
 
-切换：
+每个工作区目录下会有独立的 `AGENTS.md`、`memory.jsonl`、`MEMORY/`、`sessions/`，
+切换工作区只切换「当前读写哪一份」，不会把 A 的条目搬进 B。
 
-```text
-growth_config(scope="workspace")
-```
-
-切换时会把源库的**活跃条目和会话笔记**复制到目标库（同 id 不重复），源库原样保留；
-因此切回去还能看到原来的内容。被软删除/已取代的条目不会被迁移。
+切换范围（全局 ↔ 单工作区）时才会迁移：把源库的**活跃条目和会话笔记**复制到目标库
+（同 id 不重复），源库原样保留；因此切回去还能看到原来的内容。被软删除/已取代的条目不会被迁移。
 
 ### 个性化匹配（可选，默认关闭）
 
@@ -167,6 +172,7 @@ growth_config(personalization=true)
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `scope` | `global` | `global` 全局共享 / `workspace` 单工作区 |
+| `workspacePath` | 空 | 单工作区模式下选中的工作区目录；空 = 当前会话目录 |
 | `personalization` | `false` | 是否启用主人画像 |
 | `autoCapture` | `true` | 回合结束是否写会话笔记 |
 | `autoSummarize` | `true` | 是否调用模型提炼条目 |

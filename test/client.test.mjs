@@ -47,7 +47,7 @@ async function loadClient() {
 
 test('client module registers the settings section and stays side-effect free', async () => {
   const { definition, exports } = await loadClient()
-  assert.equal(definition.id, '@ren-0208/dsh-growth-note')
+  assert.equal(definition.id, '@ren-0208/dsh-ref-develop')
   assert.deepEqual([...exports.inject], ['slots'])
   assert.equal(typeof exports.apply, 'function')
 
@@ -71,7 +71,7 @@ test('client module registers the settings section and stays side-effect free', 
   exports.apply(ctx)
   assert.deepEqual(injected, ['settings.section'])
   assert.equal(registered.definition.name, 'settings.section')
-  assert.equal(registered.definition.id, 'growth-note')
+  assert.equal(registered.definition.id, 'dsh-ref-develop')
   assert.equal(registered.definition.order, 7)
   assert.equal(registered.definition.label(), '记忆与成长')
   assert.equal(typeof registered.component, 'function')

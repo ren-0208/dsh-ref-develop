@@ -167,6 +167,7 @@ test('host wiring: sections, tools, command, routes, events and API', async () =
     assert.equal(state.ok, true)
     assert.equal(state.config.scope, 'global')
     assert.ok(state.stats.total >= 2)
+    assert.ok(Array.isArray(state.workspaces), 'state.workspaces must be a list')
 
     const list = await (await fetch(`${base}/growth-note/api/entries?q=make`)).json()
     assert.ok(list.entries.some((entry) => entry.title.includes('make')))
@@ -181,6 +182,23 @@ test('host wiring: sections, tools, command, routes, events and API', async () =
     const workspaceState = await (await fetch(`${base}/growth-note/api/state`)).json()
     assert.ok(workspaceState.root.endsWith('.growth-note'))
     assert.equal(workspaceState.stats.total, 2)
+
+    // Selecting another already-known workspace switches the directory only:
+    // no migration between workspaces, so the new one starts empty.
+    const otherCwd = await fs.mkdtemp(path.join(os.tmpdir(), 'growth-cwd2-'))
+    const picked = await (
+      await fetch(`${base}/growth-note/api/config`, {
+        method: 'POST',
+        body: JSON.stringify({ config: { ...switched.config, workspacePath: otherCwd } }),
+      })
+    ).json()
+    assert.equal(picked.ok, true)
+    assert.equal(picked.migration, null, 'workspace -> workspace must not migrate')
+    const pickedState = await (await fetch(`${base}/growth-note/api/state`)).json()
+    assert.equal(pickedState.root, path.join(otherCwd, '.growth-note'))
+    assert.equal(pickedState.stats.total, 0)
+    await fs.rm(path.join(otherCwd, '.growth-note'), { recursive: true, force: true })
+    await fs.rm(otherCwd, { recursive: true, force: true })
 
     const exported = await (await fetch(`${base}/growth-note/api/export?format=md`)).text()
     assert.match(exported, /记忆与成长导出/)

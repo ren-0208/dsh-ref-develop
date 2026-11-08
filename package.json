@@ -1,6 +1,6 @@
 {
-  "name": "@ren-0208/dsh-growth-note",
-  "version": "0.2.0",
+  "name": "@ren-0208/dsh-ref-develop",
+  "version": "0.3.0",
   "private": true,
   "description": "Memory and growth for DSH: distill reusable methods, lessons, knowledge, problem reviews and (optional) owner preferences from past sessions, shared globally or per workspace.",
   "license": "MIT",

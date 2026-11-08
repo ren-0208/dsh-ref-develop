@@ -45,7 +45,7 @@ test('manifest, patch and locale are consistent', async () => {
 
   const patch = await fs.readFile(path.join(repo, 'cordis.patch.yml'), 'utf8')
   assert.match(patch, new RegExp(`name:\\s*'?"?${pkg.name.replace('/', '\\/')}'?"?`))
-  assert.match(patch, /- id:\s*growth-note/)
+  assert.match(patch, /- id:\s*dsh-ref-develop/)
 
   for (const [locale, expected] of [['zh', '记忆与成长'], ['en', 'Memory & Growth']]) {
     const dict = JSON.parse(await fs.readFile(path.join(repo, 'locale', `${locale}.json`), 'utf8'))
@@ -105,7 +105,7 @@ test('installing only package.json files yields a loadable plugin', async () => 
       workingDirectory: { defaultDirectory: cwd, ensure: async () => cwd },
     }
     const mod = await import(pathToFileURL(path.join(stage, 'lib', 'index.js')).href)
-    assert.equal(mod.name, 'growth-note')
+    assert.equal(mod.name, 'dsh-ref-develop')
     assert.deepEqual(mod.inject, ['tools', 'systemPrompt', 'sessionQuery', 'workingDirectory'])
     mod.apply(ctx, {})
     await new Promise((resolve) => setTimeout(resolve, 150))

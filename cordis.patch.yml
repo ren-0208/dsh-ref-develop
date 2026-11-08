@@ -1,4 +1,4 @@
 - insert:
-    - id: growth-note
-      name: '@ren-0208/dsh-growth-note'
+    - id: dsh-ref-develop
+      name: '@ren-0208/dsh-ref-develop'
       config: {}
