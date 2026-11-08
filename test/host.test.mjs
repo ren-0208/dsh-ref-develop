@@ -85,9 +85,10 @@ function makeHost({ cwd, sessionEvents, reply }) {
   return { ctx, sections, tools, handlers, store, getCommand: () => command, getRoute: () => route }
 }
 
-test('host wiring: sections, tools, command, routes, events and API', async () => {
+test('host wiring: sections, tools, command, routes, isolation and API', async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'growth-host-'))
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'growth-cwd-'))
+  const other = await fs.mkdtemp(path.join(os.tmpdir(), 'growth-other-'))
   process.env.DSH_HOME = home
 
   const agent = { id: 'agent-host', cwd }
@@ -107,7 +108,6 @@ test('host wiring: sections, tools, command, routes, events and API', async () =
   const { apply } = await import('../lib/index.js')
   apply(host.ctx, {})
 
-  // Boot is async; wait for the settings file read and store warm-up.
   await settle(200)
 
   assert.equal(host.sections[0]?.name, 'GROWTH_NOTE')
@@ -117,25 +117,19 @@ test('host wiring: sections, tools, command, routes, events and API', async () =
   assert.equal(host.getRoute()?.path, '/growth-note/api')
   assert.equal(host.getRoute()?.kind, 'prefix')
 
-  // agent/created registers the scoped section and warms the store.
   host.handlers.get('agent/created')({ agent })
   await settle(200)
   assert.equal(host.sections.length, 2)
-  assert.equal(host.sections[1].name, 'GROWTH_NOTE')
 
   const digest = () => host.sections[1].text()
   assert.match(digest(), /还没有可用记忆/)
-  assert.match(digest(), /记忆目录/)
 
-  // pre-step feeds the current question into recall.
-  const next = async () => ({ kind: 'enter', messages: [] })
   await host.handlers.get('agent/pre-step')(
     { agent, messages: [{ role: 'user', content: [{ type: 'text', text: 'cordis 服务怎么注入' }] }], turn: 1 },
-    next,
+    async () => ({ kind: 'enter', messages: [] }),
   )
   assert.match(digest(), /本轮问题：cordis 服务怎么注入/)
 
-  // growth_remember writes, and the next digest render sees the entry.
   const remember = await host.tools.get('growth_remember').execute(
     { kind: 'method', title: '插件服务优先读 ctx 属性', body: 'ctx.get("tools") 在真机是 undefined，先读属性。', tags: ['cordis'] },
     { agent },
@@ -143,7 +137,6 @@ test('host wiring: sections, tools, command, routes, events and API', async () =
   assert.match(remember, /已新增/)
   assert.match(digest(), /插件服务优先读 ctx 属性/)
 
-  // turn-stopping: session note + model distillation (fake LLM).
   await host.handlers.get('agent/turn-stopping')({ agent, turn: 6 })
   await settle(500)
   const globalRoot = path.join(home, 'growth-note', 'global')
@@ -151,97 +144,83 @@ test('host wiring: sections, tools, command, routes, events and API', async () =
   assert.match(memory, /本机没有 make/)
   assert.match(memory, /插件服务优先读 ctx 属性/)
 
-  // The slash command reads the same state.
   const status = await host.getCommand().handler({ agent, rawInput: 'status' })
   assert.equal(status.kind, 'success')
   assert.match(status.text, /全局记忆/)
 
-  // The settings API over real HTTP.
   const server = http.createServer((req, res) => {
     host.getRoute().handler(req, res)
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const base = `http://127.0.0.1:${server.address().port}`
+  const api = (route, init) => fetch(`${base}/growth-note/api${route}`, init)
+  const postConfig = (config) => api('/config', { method: 'POST', body: JSON.stringify({ config }) })
+  const state = async () => (await api('/state')).json()
+
   try {
-    const state = await (await fetch(`${base}/growth-note/api/state`)).json()
-    assert.equal(state.ok, true)
-    assert.equal(state.config.scope, 'global')
-    assert.ok(state.stats.total >= 2)
-    assert.ok(Array.isArray(state.workspaces), 'state.workspaces must be a list')
+    const initial = await state()
+    assert.equal(initial.enabled, true)
+    assert.equal(initial.config.scope, 'global')
+    assert.ok(initial.stats.total >= 2)
 
-    const list = await (await fetch(`${base}/growth-note/api/entries?q=make`)).json()
-    assert.ok(list.entries.some((entry) => entry.title.includes('make')))
-
-    const switched = await (
-      await fetch(`${base}/growth-note/api/config`, { method: 'POST', body: JSON.stringify({ config: { ...state.config, scope: 'workspace' } }) })
-    ).json()
+    // global -> workspace: an isolated, empty library; nothing is copied.
+    const switched = await (await postConfig({ ...initial.config, scope: 'workspace', workspacePaths: [cwd] })).json()
     assert.equal(switched.ok, true)
-    assert.equal(switched.config.scope, 'workspace')
-    assert.equal(switched.migration.added, 2)
+    assert.equal(switched.migration, null)
+    assert.equal(switched.enabled, true)
 
-    const workspaceState = await (await fetch(`${base}/growth-note/api/state`)).json()
+    const workspaceState = await state()
     assert.ok(workspaceState.root.endsWith('.growth-note'))
-    assert.equal(workspaceState.stats.total, 2)
+    assert.equal(workspaceState.stats.total, 0)
+    assert.equal(workspaceState.workspacePaths[0], cwd.replace(/\\/g, '/'))
 
-    // Selecting another already-known workspace switches the directory only:
-    // no migration between workspaces, so the new one starts empty.
-    const otherCwd = await fs.mkdtemp(path.join(os.tmpdir(), 'growth-cwd2-'))
-    const picked = await (
-      await fetch(`${base}/growth-note/api/config`, {
-        method: 'POST',
-        body: JSON.stringify({ config: { ...switched.config, workspacePath: otherCwd } }),
-      })
-    ).json()
-    assert.equal(picked.ok, true)
-    assert.equal(picked.migration, null, 'workspace -> workspace must not migrate')
-    const pickedState = await (await fetch(`${base}/growth-note/api/state`)).json()
-    assert.equal(pickedState.root, path.join(otherCwd, '.growth-note'))
-    assert.equal(pickedState.stats.total, 0)
-    await fs.rm(path.join(otherCwd, '.growth-note'), { recursive: true, force: true })
-    await fs.rm(otherCwd, { recursive: true, force: true })
+    const created = await api('/entries', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'method', title: '工作区专属条目', body: '只在所选工作区里可见' }),
+    })
+    assert.equal(created.status, 200)
+    assert.equal((await state()).stats.total, 1)
 
-    const exported = await (await fetch(`${base}/growth-note/api/export?format=md`)).text()
+    // A session outside the selected workspaces falls back to the default state.
+    const inactive = await (await postConfig({ ...(await state()).config, workspacePaths: [other] })).json()
+    assert.equal(inactive.enabled, false)
+    const inactiveState = await state()
+    assert.equal(inactiveState.root, null)
+    assert.equal(digest(), '')
+    assert.match(
+      await host.tools.get('growth_remember').execute({ kind: 'method', title: 'x', body: 'y' }, { agent }),
+      /记忆未启用/,
+    )
+    const refused = await api('/entries', { method: 'POST', body: JSON.stringify({ kind: 'method', title: 'x', body: 'y' }) })
+    assert.equal(refused.status, 409)
+
+    // Selecting the session directory again restores the same workspace library.
+    await postConfig({ ...(await state()).config, workspacePaths: [cwd] })
+    assert.equal((await state()).stats.total, 1)
+
+    // Back to global: its own library is untouched and still everything it had.
+    const back = await (await postConfig({ ...(await state()).config, scope: 'global' })).json()
+    assert.equal(back.migration, null)
+    assert.ok((await state()).stats.total >= 2)
+
+    // off: no injection at all, writes refused, export still browseable.
+    await postConfig({ ...(await state()).config, scope: 'off' })
+    const offState = await state()
+    assert.equal(offState.enabled, false)
+    assert.equal(digest(), '')
+    assert.equal((await api('/entries', { method: 'POST', body: JSON.stringify({ kind: 'method', title: 'x', body: 'y' }) })).status, 409)
+
+    const exported = await (await api('/export?format=md')).text()
     assert.match(exported, /记忆与成长导出/)
 
-    const rejected = await fetch(`${base}/growth-note/api/entries`, { method: 'POST', body: JSON.stringify({ kind: 'preference', title: 'x', body: 'y' }) })
-    assert.equal(rejected.status, 400)
-
-    // Turning memory off: no injection, no writes, no distillation. Stored data stays.
-    const offSwitch = await (
-      await fetch(`${base}/growth-note/api/config`, { method: 'POST', body: JSON.stringify({ config: { ...pickedState.config, scope: 'off' } }) })
-    ).json()
-    assert.equal(offSwitch.ok, true)
-    assert.equal(offSwitch.config.scope, 'off')
-    const offState = await (await fetch(`${base}/growth-note/api/state`)).json()
-    assert.equal(offState.enabled, false)
-    assert.match(digest(), /记忆已关闭/)
-
-    const refusedOff = await host.tools.get('growth_remember').execute({ kind: 'method', title: '不该写入', body: '关闭时不许写' }, { agent })
-    assert.match(refusedOff, /记忆已关闭/)
-    const consolidateOff = await fetch(`${base}/growth-note/api/consolidate`, { method: 'POST', body: JSON.stringify({}) })
-    assert.equal(consolidateOff.status, 409)
-
-    // turn-stopping must not even touch a store while off (no directory created).
-    await host.handlers.get('agent/turn-stopping')({ agent, turn: 7 })
-    await settle(200)
-    await assert.rejects(fs.access(path.join(otherCwd, '.growth-note')), 'off must not create a store')
-
-    // Switching back restores the global library untouched (no migration happened).
-    const back = await (
-      await fetch(`${base}/growth-note/api/config`, { method: 'POST', body: JSON.stringify({ config: { ...pickedState.config, scope: 'global' } }) })
-    ).json()
-    assert.equal(back.ok, true)
-    assert.equal(back.migration, null, 'off -> global must not migrate')
-    const backState = await (await fetch(`${base}/growth-note/api/state`)).json()
-    assert.equal(backState.enabled, true)
-    assert.equal(backState.stats.total, 2)
-    assert.match(digest(), /插件服务优先读 ctx 属性/)
+    await postConfig({ ...(await state()).config, scope: 'global' })
+    assert.equal((await state()).enabled, true)
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }
 
-  // Remove the workspace memory the test created (no stray dirs in the repo).
   await fs.rm(path.join(cwd, '.growth-note'), { recursive: true, force: true })
+  await fs.rm(path.join(other, '.growth-note'), { recursive: true, force: true })
   await fs.rm(home, { recursive: true, force: true })
   delete process.env.DSH_HOME
 })

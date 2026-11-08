@@ -8,7 +8,7 @@ import { CONFIG_DEFAULTS, normalizeConfig } from '../lib/config.js'
 import { GrowthStore } from '../lib/store.js'
 import { createTools } from '../lib/tools.js'
 
-async function harness({ config = {} } = {}) {
+async function harness({ config = {}, cwd = 'C:/w' } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'growth-tools-'))
   const root = path.join(home, 'global')
   const store = new GrowthStore(root)
@@ -25,11 +25,20 @@ async function harness({ config = {} } = {}) {
     markDirty: () => {
       dirty += 1
     },
-    storeForAgent: async () => store,
-    cwdSync: () => 'C:/w',
+    storeForAgent: async () => {
+      if (current.scope === 'off') return null
+      if (current.scope === 'workspace') {
+        const inside = current.workspacePaths.some(
+          (base) => cwd.toLowerCase() === base.toLowerCase() || cwd.toLowerCase().startsWith(`${base.toLowerCase()}/`),
+        )
+        if (!inside) return null
+      }
+      return store
+    },
+    cwdSync: () => cwd,
   }
   const tools = new Map(createTools({ runtime }).map((tool) => [tool.name, tool]))
-  const exec = { agent: { id: 'agent-1' } }
+  const exec = { agent: { id: 'agent-1', cwd } }
   return { home, root, store, runtime, tools, exec, dirtyCount: () => dirty, getConfig: () => current }
 }
 
@@ -114,6 +123,43 @@ test('growth_config can turn memory off; writes are refused until re-enabled', a
   const written = await h.tools.get('growth_remember').execute({ kind: 'lesson', title: '恢复后能写', body: '是的' }, h.exec)
   assert.match(written, /已新增/)
   assert.equal((await h.store.entries()).length, 2)
+})
+
+test('workspace scope only reads memory inside the selected workspaces', async () => {
+  const inside = await harness({ cwd: 'C:/w/alpha', config: { scope: 'workspace', workspacePaths: ['C:/w/alpha'] } })
+  assert.match(
+    await inside.tools.get('growth_remember').execute({ kind: 'method', title: '在范围内', body: '可以写' }, inside.exec),
+    /已新增/,
+  )
+
+  const outside = await harness({ cwd: 'C:/w/beta', config: { scope: 'workspace', workspacePaths: ['C:/w/alpha'] } })
+  assert.match(
+    await outside.tools.get('growth_remember').execute({ kind: 'method', title: '范围外', body: '不能写' }, outside.exec),
+    /记忆未启用/,
+  )
+  assert.match(await outside.tools.get('growth_status').execute({}, outside.exec), /本会话未启用记忆/)
+})
+
+test('an empty workspace selection disables memory until a workspace is chosen', async () => {
+  const h = await harness({ cwd: 'C:/w/alpha', config: { scope: 'workspace', workspacePaths: [] } })
+  assert.match(
+    await h.tools.get('growth_remember').execute({ kind: 'method', title: '未选工作区', body: '不写' }, h.exec),
+    /记忆未启用/,
+  )
+  const text = await h.tools.get('growth_config').execute({ workspacePaths: ['C:/w/alpha'] }, h.exec)
+  assert.match(text, /已选工作区：C:\/w\/alpha/)
+  assert.match(
+    await h.tools.get('growth_remember').execute({ kind: 'method', title: '选中后', body: '可写' }, h.exec),
+    /已新增/,
+  )
+})
+
+test('switching scopes does not migrate entries automatically', async () => {
+  const h = await harness()
+  await h.tools.get('growth_remember').execute({ kind: 'method', title: '全局条目', body: '留在全局库' }, h.exec)
+  const text = await h.tools.get('growth_config').execute({ scope: 'workspace', workspacePaths: ['C:/other'] }, h.exec)
+  assert.match(text, /未启用|互相隔离/)
+  assert.equal((await h.store.entries()).length, 1)
 })
 
 test('growth_export returns markdown and json', async () => {
