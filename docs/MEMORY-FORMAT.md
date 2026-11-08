@@ -10,6 +10,7 @@
                                工作区：<所选工作区>/.growth-note（会话目录须在所选工作区内）
   AGENTS.md                     入口说明（首次创建时写入，之后不覆盖）
   memory.jsonl                  权威数据：一行一个条目
+  vectors.jsonl                 可选向量索引：一行 {id, sig, v}；删除即回到纯关键词召回
   store.json                    存储版本与元信息 {"version":2}
   memory.jsonl.lock             写入时的跨进程锁（短命，正常不残留）
   MEMORY/
@@ -93,6 +94,24 @@ strength = confidence × 0.5^(ageDays / halfLifeDays)
 同一 `lesson` 被重复提及时 `confidence` 升高；当它的证据数或重复次数达到
 `promoteLessonAfter`（默认 3）时，自动生成一条 `method`：
 标题沿用、正文加前缀、`promotedFrom` 指向原 lesson。
+
+## vectors.jsonl（可选）
+
+仅在启用向量检索时存在，与 `memory.jsonl` 一行一对象、同一把锁：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | 对应 `memory.jsonl` 的条目 id |
+| `sig` | 嵌入签名 `provider:model`；与实际配置不符即视为过期 |
+| `v` | Float32 向量经 base64 编码后的字符串 |
+
+规则：
+
+- 条目被新增以外的任何变更（合并、编辑、软删除、硬删除）都会**立即删除对应向量**，等待后台重算。
+- 指向已不存在条目的记录在保存时同时从磁盘与内存中清除。
+- 整个文件可随时删除或 `POST /growth-note/api/embeddings {op:'clear'}` 清空，记忆不受影响；
+  下次写入或 `op:'reindex'` 时重建。
+- 未启用嵌入服务时该文件保持为空，召回完全走关键词打分。
 
 ## 视图文件
 

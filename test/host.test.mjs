@@ -224,3 +224,98 @@ test('host wiring: sections, tools, command, routes, isolation and API', async (
   await fs.rm(home, { recursive: true, force: true })
   delete process.env.DSH_HOME
 })
+
+test('optional embeddings: off by default, semantic once configured', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'growth-vec-home-'))
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'growth-vec-cwd-'))
+  process.env.DSH_HOME = home
+  const agent = { id: 'agent-vec', cwd }
+
+  const host = makeHost({ cwd, sessionEvents: {}, reply: '[]' })
+  const realFetch = globalThis.fetch
+  const embeddingCalls = []
+  // Only /embeddings is intercepted; the test's own API calls use the real fetch.
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).includes('/embeddings')) return realFetch(url, init)
+    const body = JSON.parse(init.body)
+    embeddingCalls.push(body)
+    return {
+      ok: true,
+      async json() {
+        return { data: body.input.map((_text, index) => ({ index, embedding: [1, 0, 0] })) }
+      },
+    }
+  }
+  try {
+    const { apply } = await import('../lib/index.js')
+    apply(host.ctx, {})
+    await settle(200)
+    host.handlers.get('agent/created')({ agent })
+    await settle(150)
+
+    const server = http.createServer((req, res) => host.getRoute().handler(req, res))
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${server.address().port}`
+    const api = (route, init) => realFetch(`${base}/growth-note/api${route}`, init)
+    const state = async () => (await api('/state')).json()
+    const postConfig = (config) => api('/config', { method: 'POST', body: JSON.stringify({ config }) })
+
+    try {
+      // Default: no provider, no vectors, purely lexical.
+      const initial = await state()
+      assert.equal(initial.embedding.provider, 'none')
+      assert.equal(initial.embedding.available, false)
+      assert.equal(embeddingCalls.length, 0)
+      const reindexOff = await api('/embeddings', { method: 'POST', body: JSON.stringify({ op: 'reindex' }) })
+      assert.equal(reindexOff.status, 409, 'reindex must be refused without a provider')
+
+      await host.tools.get('growth_remember').execute(
+        { kind: 'knowledge', title: '向量检索接入方式', body: 'OpenAI 兼容 /embeddings，向量存 vectors.jsonl' },
+        { agent },
+      )
+      const lexicalOnly = await (await api('/recall', { method: 'POST', body: JSON.stringify({ query: '解耦的无关键词查询' }) })).json()
+      assert.equal(lexicalOnly.semantic, false)
+
+      // Configure a provider: the config write triggers a background backfill.
+      const saved = await (await postConfig({ ...initial.config, embeddingProvider: 'openai', embeddingModel: 'fake-embed', embeddingApiKey: 'k' })).json()
+      assert.equal(saved.ok, true)
+      await settle(400)
+
+      const withVectors = await state()
+      assert.equal(withVectors.embedding.provider, 'openai')
+      assert.equal(withVectors.embedding.available, true)
+      assert.equal(withVectors.embedding.signature, 'openai:fake-embed')
+      assert.ok(withVectors.embedding.vectors.covered >= 1, 'entry should be indexed')
+      assert.ok(embeddingCalls.length >= 1, 'the provider must actually be called')
+
+      const semanticRecall = await (await api('/recall', { method: 'POST', body: JSON.stringify({ query: '完全不同的措辞' }) })).json()
+      assert.equal(semanticRecall.semantic, true)
+      assert.ok(semanticRecall.items.length >= 1)
+      assert.ok(semanticRecall.items[0].semantic > 0.9)
+
+      // Rebuild: clears then re-embeds, and stays consistent with active entries.
+      const reindexed = await (await api('/embeddings', { method: 'POST', body: JSON.stringify({ op: 'reindex' }) })).json()
+      assert.equal(reindexed.ok, true)
+      assert.ok(reindexed.vectors.covered >= 1)
+      assert.equal(reindexed.vectors.covered, reindexed.vectors.active)
+
+      // Clear drops the index but keeps every memory.
+      const cleared = await (await api('/embeddings', { method: 'POST', body: JSON.stringify({ op: 'clear' }) })).json()
+      assert.equal(cleared.ok, true)
+      const afterClear = await state()
+      assert.equal(afterClear.embedding.vectors.total, 0)
+      assert.ok(afterClear.stats.total >= 1, 'memories must survive clearing the index')
+
+      // Back to lexical-only.
+      await postConfig({ ...(await state()).config, embeddingProvider: 'none' })
+      assert.equal((await state()).embedding.available, false)
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  } finally {
+    globalThis.fetch = realFetch
+    await fs.rm(path.join(cwd, '.growth-note'), { recursive: true, force: true })
+    await fs.rm(home, { recursive: true, force: true })
+    delete process.env.DSH_HOME
+  }
+})

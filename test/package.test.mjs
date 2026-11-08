@@ -76,6 +76,7 @@ test('installing only package.json files yields a loadable plugin', async () => 
   const selected = all.filter((file) => pkg.files.some((pattern) => matches(pattern, file)))
   assert.ok(selected.includes('lib/index.js'))
   assert.ok(selected.includes('lib/client.js'))
+  assert.ok(selected.includes('lib/embeddings.js'))
   assert.ok(selected.includes('cordis.patch.yml'))
   assert.ok(selected.includes('locale/zh.json'))
   assert.ok(selected.includes('icon.svg'))

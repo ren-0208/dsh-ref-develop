@@ -19,7 +19,8 @@ DSH 的每次新会话默认从零开始。「记忆与成长」在会话进行�
 - **证据化**：每条记忆必须引用原文片段。模型给出的引用无法在对话中找到时，该条目标记为「未经核实」并降权。
 - **六类记忆**：方法 `method`、教训 `lesson`（否决清单）、领域知识 `knowledge`、题目复盘 `wp`、
   用户画像 `preference`（需显式开启）、项目状态 `state`。
-- **按问题召回**：注入内容并非固定全量清单，而是依据本轮用户消息的关键词与条目强度挑选 top-k。
+- **按问题召回**：注入内容并非固定全量清单，而是依据本轮用户消息的关键词与条目强度挑选 top-k；
+  可选开启向量检索，让「措辞不同但语义接近」的记忆也能被召回。
 - **强度与衰减**：置信度、使用次数与证据数量共同决定强度，强度按半衰期衰减；重复出现的教训可升级为方法。
 - **三种记忆范围**：全局记忆、单工作区记忆（可多选工作区）、无。三者相互隔离，切换不自动迁移数据。
 - **设置页**：在 DSH「设置 → 记忆与成长」中查看、筛选、编辑、删除与导出记忆。
@@ -37,7 +38,8 @@ DSH 的每次新会话默认从零开始。「记忆与成长」在会话进行�
 | `lib/entry.js` | 条目模型：归一化、相似度、合并、强度衰减、教训升级 |
 | `lib/store.js` | 文件存储：JSONL 权威数据、Markdown 视图、会话笔记、迁移、导出 |
 | `lib/fsx.js` | 原子写、跨进程文件锁、JSON/JSONL 读写 |
-| `lib/recall.js` | 分词、排序、按问题挑选注入条目 |
+| `lib/recall.js` | 分词、排序（关键词 + 可选语义相似度）、按问题挑选注入条目 |
+| `lib/embeddings.js` | 可插拔嵌入接口：提供者抽象、向量编解码、余弦相似度 |
 | `lib/prompt.js` | 生成注入系统提示词的记忆摘要 |
 | `lib/tools.js` | 模型可调用的 `growth_*` 工具 |
 | `lib/consolidate.js` | 回合落盘、模型提炼与证据校验 |
@@ -109,7 +111,7 @@ plugin_manager action=remove_bundle target=@ren-0208/dsh-ref-develop
 | --- | --- |
 | `growth_remember` | 写入一条记忆（六类 kind 之一；`preference` 需先开启个性化） |
 | `growth_recall` | 按关键词检索记忆，返回原文与证据；命中会累加使用次数 |
-| `growth_config` | 查看或切换：全局 / 单工作区（多选工作区）/ 关闭、个性化、提炼频率、预算、条数上限；`migrate=true` 时才复制条目 |
+| `growth_config` | 查看或切换：全局 / 单工作区（多选工作区）/ 关闭、个性化、提炼频率、预算、条数上限、向量检索；`migrate=true` 时才复制条目 |
 | `growth_status` | 查看范围、目录、条目统计与最近更新 |
 | `growth_forget` | 删除条目：默认软删除（状态置 `rejected`，保留证据），`hard=true` 彻底移除 |
 | `growth_edit` | 修改标题、正文、标签与置信度 |
@@ -123,6 +125,7 @@ plugin_manager action=remove_bundle target=@ren-0208/dsh-ref-develop
   （标题与路径），也支持手动添加路径；仅当会话目录位于所选工作区内时才读写记忆。
 - 个性化开关、自动记录与自动提炼开关。
 - 提炼间隔、摘要预算、条数上限。
+- 向量检索（可选）：选择嵌入服务、填写模型与地址、重建索引。
 - 「立即总结」：立即提炼当前会话已有的笔记。
 - 条目列表：按类型筛选、关键词搜索、查看置信度与使用次数、编辑、删除。
 - 导出 Markdown。
@@ -141,6 +144,7 @@ plugin_manager action=remove_bundle target=@ren-0208/dsh-ref-develop
 /growth config personalization=true
 /growth export md|json
 /growth consolidate                      立即提炼
+/growth reindex                          重建向量索引（需已配置嵌入服务）
 /growth forget <id> [hard]
 ```
 
@@ -180,6 +184,29 @@ growth_config(personalization=true)
 
 仅记录有证据支撑的稳定偏好。同一切面（aspect）出现新值时，新值取代旧值，不会将两种风格并列保存。
 `preference` 类条目不参与按条数淘汰，但长期未使用同样会衰减。
+
+### 向量检索与 RAG 接口（可选，默认关闭）
+
+默认只做关键词召回，不联网、不依赖任何外部服务。开启后，条目会被嵌入为向量，召回时在关键词分数之上叠加余弦相似度，
+使「换了说法但意思相同」的记忆也能命中。
+
+```text
+growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small", embeddingApiKey="sk-...")
+```
+
+- 接口为 **OpenAI 兼容的 `/embeddings`**，任何提供同形状接口的服务均可使用（本地 Ollama、各类中转均可），
+  通过 `embeddingBaseUrl` 指定地址，默认为 `https://api.openai.com/v1`。
+- 密钥也可由环境变量 `DSH_GROWTH_EMBEDDING_API_KEY` 提供，避免写入 `settings.json`。
+- 向量存于记忆库根目录的 `vectors.jsonl`（base64 编码的 Float32），与 `memory.jsonl` 完全分离：
+  删掉索引文件即可回到纯关键词模式，记忆本身不受影响。
+- 条目被修改、合并或删除时，其向量立即失效并在后台重算；更换模型后旧向量自动视为过期。
+- 索引重建：设置页「重建索引」按钮、`/growth reindex`，或 `POST /growth-note/api/embeddings`（`op=reindex|clear`）。
+
+设计上预留了跨会话检索的接口（见 `docs/DESIGN.md`「向量检索与 RAG 接口」）：嵌入提供者是可替换的，
+向量以条目 id 为键独立存放，召回层只依赖「给定查询向量与候选向量集合」这一契约，
+因此后续接入跨工作区、跨设备的记忆检索时，无需改动条目模型与存储格式。
+
+> 隐私提示：启用后，条目正文会发送至所选嵌入服务。未启用时插件不发起任何网络请求。
 
 ### 成长范围
 
@@ -223,6 +250,10 @@ growth_config(personalization=true)
 | `minConfidence` | `0.35` | 低于该置信度的条目不再进入召回候选 |
 | `dedupeThreshold` | `0.7` | 标题相似度达到该值才合并 |
 | `promoteLessonAfter` | `3` | 同一教训出现多少次后升级为方法 |
+| `embeddingProvider` | `none` | 向量检索提供者：`none` 仅关键词 / `openai` 兼容 `/embeddings` 接口 |
+| `embeddingModel` | `""` | 嵌入模型名（如 `text-embedding-3-small`） |
+| `embeddingBaseUrl` | `""` | 嵌入服务地址，留空使用 `https://api.openai.com/v1` |
+| `embeddingApiKey` | `""` | 嵌入服务密钥；留空时读取 `DSH_GROWTH_EMBEDDING_API_KEY` |
 | `locale` | `zh` | 提炼提示词与摘要语言 |
 
 运行时配置写入 `$DSH_HOME/growth-note/settings.json`，重启后保持；bundle 中的 `config` 仅提供初始值。
@@ -233,6 +264,7 @@ growth_config(personalization=true)
 <root>/
   AGENTS.md            入口说明（自动生成一次）
   memory.jsonl         权威数据：一行一条目（含证据、置信度、状态）
+  vectors.jsonl        可选向量索引：一行 {id, sig, v}（base64 向量），可随时删除重建
   store.json           存储版本与元信息
   MEMORY/
     INDEX.md           总表与最近更新（生成）
@@ -253,8 +285,8 @@ growth_config(personalization=true)
 - 全部数据位于本机文件系统，不向第三方上传；提炼使用使用者当前配置的模型。
 - 记忆内容会进入系统提示词，等同于发送给模型服务商，与正常对话一致；设置页可随时删除单条或导出全部。
 - 插件不读取历史会话全文，仅读取**当前会话**的事件流以生成笔记；跨会话经验通过落盘条目传递。
-- 不引入向量检索（保持零依赖），采用关键词、汉字 bigram、置信度、使用频次与新鲜度综合打分，
-  结果可解释且不依赖外部服务。
+- 默认不联网：`embeddingProvider: none` 时召回完全在本地完成（关键词、汉字 bigram、置信度、使用频次与新鲜度综合打分）。
+  仅在显式开启向量检索后，条目正文才会发送至使用者指定的嵌入服务；索引保存在本地，可随时删除。
 - 记忆是「可修正的草稿」：与当前事实冲突时以事实为准，可通过 `growth_remember` 覆盖或 `growth_forget` 删除。
 
 ## 开发

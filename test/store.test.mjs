@@ -168,3 +168,58 @@ test('resolveRoot switches between global and workspace memory', async () => {
   assert.equal(settingsFilePath(home), path.join(home, 'growth-note', 'settings.json'))
   assert.ok(resolveDshHome().length > 0)
 })
+
+test('vector index persists, covers active entries and survives reload', async () => {
+  const { store, root } = await tempStore()
+  const first = await store.addEntry({ kind: 'method', title: '向量检索', body: '把条目文本嵌入后按余弦相似度召回' })
+  const second = await store.addEntry({ kind: 'lesson', title: '另一个', body: '无关内容' })
+  await store.upsertVectors([
+    { id: first.entry.id, sig: 'openai:m', vec: [1, 0, 0] },
+    { id: second.entry.id, sig: 'openai:m', vec: [0, 1, 0] },
+  ])
+  const stats = await store.vectorStats()
+  assert.equal(stats.total, 2)
+  assert.equal(stats.covered, 2)
+  assert.equal(stats.active, 2)
+  assert.deepEqual(stats.signatures, ['openai:m'])
+
+  // A fresh instance reads the same index back from vectors.jsonl.
+  const reloaded = new GrowthStore(root)
+  await reloaded.ensure()
+  const vectors = await reloaded.loadVectors()
+  assert.equal(vectors.size, 2)
+  assert.deepEqual(vectors.get(first.entry.id).vec, [1, 0, 0])
+  assert.equal(vectors.get(first.entry.id).sig, 'openai:m')
+})
+
+test('writing or deleting an entry invalidates its stale vector', async () => {
+  const { store } = await tempStore()
+  const { entry } = await store.addEntry({ kind: 'method', title: '会被改动', body: '原始正文' })
+  await store.upsertVectors([{ id: entry.id, sig: 'openai:m', vec: [1, 0] }])
+  assert.equal((await store.vectorStats()).covered, 1)
+
+  await store.updateEntry(entry.id, { body: '改过的正文' })
+  assert.equal((await store.vectorStats()).covered, 0, 'update must drop the stale vector')
+
+  await store.upsertVectors([{ id: entry.id, sig: 'openai:m', vec: [1, 0] }])
+  await store.removeEntry(entry.id, { soft: true })
+  assert.equal((await store.vectorStats()).total, 0, 'soft delete must drop the vector')
+})
+
+test('clearVectors empties the index without touching memories', async () => {
+  const { store, root } = await tempStore()
+  const { entry } = await store.addEntry({ kind: 'wp', title: 'CTF 复盘', body: '关键一步' })
+  await store.upsertVectors([{ id: entry.id, sig: 'openai:m', vec: [0.5, 0.5] }])
+  await store.clearVectors()
+  assert.equal((await store.vectorStats()).total, 0)
+  assert.equal((await store.entries()).length, 1, 'memory.jsonl must be untouched')
+  assert.equal(await fs.readFile(path.join(root, 'vectors.jsonl'), 'utf8'), '')
+})
+
+test('vectors for unknown entries are never persisted', async () => {
+  const { store } = await tempStore()
+  await store.addEntry({ kind: 'method', title: '存在', body: 'b' })
+  await store.upsertVectors([{ id: 'mg-does-not-exist', sig: 'openai:m', vec: [1, 1] }])
+  const stats = await store.vectorStats()
+  assert.equal(stats.total, 0)
+})

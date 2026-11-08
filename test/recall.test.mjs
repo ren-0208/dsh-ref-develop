@@ -89,3 +89,38 @@ test('describeEntry includes id, confidence and body', () => {
   assert.match(text, /置信 80%/)
   assert.match(text, new RegExp(entry.id))
 })
+
+test('semantic vectors reorder results when lexical overlap is absent', () => {
+  const lexical = normalizeEntry({ kind: 'knowledge', title: 'nginx 配置', body: '监听端口和 upstream' })
+  const semantic = normalizeEntry({ kind: 'knowledge', title: '服务注入的写法', body: '插件访问宿主能力的方式' })
+  const vectors = new Map([
+    [lexical.id, { sig: 'openai:m', vec: [0, 1] }],
+    [semantic.id, { sig: 'openai:m', vec: [1, 0] }],
+  ])
+  // The query matches the "semantic" entry only through its vector.
+  const ranked = rankEntries([lexical, semantic], { tokens: new Set(['无关词']), vectors, queryVector: [1, 0] })
+  assert.equal(ranked[0].entry.id, semantic.id)
+  assert.ok(ranked[0].semantic > 0.9)
+  assert.equal(ranked[0].lexical, 0)
+})
+
+test('without vectors recall behaves exactly like lexical scoring', () => {
+  const entry = normalizeEntry({ kind: 'method', title: 'cordis 注入', body: 'ctx.tools' })
+  const plain = rankEntries([entry], { tokens: new Set(['cordis']) })
+  const withNullVectors = rankEntries([entry], { tokens: new Set(['cordis']), vectors: null, queryVector: null })
+  assert.equal(plain[0].score, withNullVectors[0].score)
+  assert.equal(withNullVectors[0].semantic, 0)
+})
+
+test('selectForDigest keeps a semantic-only match out of the filler bucket', () => {
+  const semantic = normalizeEntry({ kind: 'method', title: '与查询词无关但语义接近', body: 'body' })
+  const vectors = new Map([[semantic.id, { sig: 'openai:m', vec: [1, 0] }]])
+  const { groups, matched } = selectForDigest([semantic], {
+    tokens: new Set(['完全不同的词']),
+    config: config(),
+    vectors,
+    queryVector: [1, 0],
+  })
+  assert.equal(groups.method.length, 1)
+  assert.equal(matched, 1)
+})

@@ -1,8 +1,8 @@
 {
   "name": "@ren-0208/dsh-ref-develop",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "Memory and growth for DSH: distill reusable methods, lessons, knowledge, problem reviews and (optional) owner preferences from past sessions, shared globally or per workspace.",
+  "description": "Memory and growth for DSH: distill reusable methods, lessons, knowledge, problem reviews and (optional) user preferences from past sessions, shared globally or per workspace, with an optional embedding index for semantic recall.",
   "license": "MIT",
   "type": "module",
   "engines": {
