@@ -56,28 +56,32 @@ DSH 参考实现开发仓库。当前内容：**记忆与成长**（插件包名
 
 ## 安装
 
-先把仓库克隆到本机（任意目录都可以，下面用 `<克隆目录>` 代指）：
+把下面这段整体复制给任意一个 DSH 会话，让它自己拉取并安装：
+
+```text
+帮我安装 DSH 插件「记忆与成长」：https://github.com/ren-0208/dsh-ref-develop.git
+1. 浅克隆到 $DSH_HOME/plugins/dsh-ref-develop（目录已存在就 git pull --ff-only）
+2. 用 plugin_manager action=install_bundle target=<克隆目录> 安装
+3. 报告 application 是否为 applied，以及设置页是否出现「记忆与成长」
+```
+
+装完不用重启：设置页出现「记忆与成长」，会话里可以直接调用 `growth_status`。
+仓库是私有的——克隆需要你先有访问权限，或者让对方把你加进协作者。
+
+<details>
+<summary>自动安装失败时的手动步骤</summary>
 
 ```bash
 git clone https://github.com/ren-0208/dsh-ref-develop.git
 ```
 
-然后在 DSH 中把这个目录作为本地 bundle 安装（推荐，安装后改代码立即生效）：
-
 ```text
 plugin_manager action=install_bundle target=<克隆目录>
 ```
 
-例如克隆到 `D:\plugins\dsh-ref-develop`，就写：
+`target` 必须是你机器上含 `package.json` 和 `cordis.patch.yml` 的那一层目录，别照抄别人的绝对路径。
 
-```text
-plugin_manager action=install_bundle target=D:\plugins\dsh-ref-develop
-```
-
-> 不要拿别人的绝对路径直接抄——`target` 必须是你自己机器上仓库所在的那一层目录
-> （即含 `package.json` 和 `cordis.patch.yml` 的那一层）。
-
-或者手动组合：在 profile 的 `cordis.patch.yml` 追加
+也可以手动组合：在 profile 的 `cordis.patch.yml` 追加
 
 ```yaml
 - insert:
@@ -87,8 +91,11 @@ plugin_manager action=install_bundle target=D:\plugins\dsh-ref-develop
         scope: global
 ```
 
-安装后无需重启即可用：设置页会出现「记忆与成长」，会话里 `growth_status` 可调用。
+已经装过同名包时，`install_bundle` 会提示 `already-installed`：用 `plugin_manager action=set_bundle` 先 disable 再 enable 重载代码，或先 `remove_bundle` 再重装。
+
 卸载：`plugin_manager action=remove_bundle target=@ren-0208/dsh-ref-develop`（记忆目录不会被删除）。
+
+</details>
 
 ## 用法
 
