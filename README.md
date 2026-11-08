@@ -275,5 +275,5 @@ for f in test/*.test.mjs; do node "$f"; done
 ## 环境要求
 
 - DSH（桌面版或命令行版），支持 Cordis bundle 插件与 `settings.section` 槽位。
-- Node.js ≥ 20（插件使用 ESM 与私有类字段；`engines` 已声明）。
+- Node.js ≥ 20（插件使用原生 ESM 与类私有字段 `#field`；`engines` 已声明）。
 - 无需安装任何依赖，无构建步骤。
