@@ -125,7 +125,7 @@ strength = confidence × 0.5^(ageDays / halfLifeDays)
 `buildDigest` 生成，受 `promptBudgetChars` 限制（默认 1800 字符）：
 
 ```markdown
-## 记忆与成长（growth-note）
+## 记忆与成长（dsh-ref-develop）
 范围：全局记忆（所有工作区共享） · 记忆目录：`<root>`
 用法：下面只是摘要（共 7 条，本轮命中 2 条）；需要原文时调用 `growth_recall(query)`。没有证据支持的内容不要当成事实。
 本轮问题：cordis 服务怎么注入

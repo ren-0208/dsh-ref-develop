@@ -106,7 +106,7 @@ test('installing only package.json files yields a loadable plugin', async () => 
     }
     const mod = await import(pathToFileURL(path.join(stage, 'lib', 'index.js')).href)
     assert.equal(mod.name, 'dsh-ref-develop')
-    assert.deepEqual(mod.inject, ['tools', 'systemPrompt', 'sessionQuery', 'workingDirectory'])
+    assert.deepEqual(mod.inject, ['tools', 'systemPrompt', 'sessionQuery', 'workingDirectory', 'commands', 'webServer'])
     mod.apply(ctx, {})
     await new Promise((resolve) => setTimeout(resolve, 150))
     assert.equal(tools.size, 7)
