@@ -56,11 +56,26 @@ growth-note 让 DSH 从**已经发生的会话**里提炼可复用的方法、�
 
 ## 安装
 
-在 DSH 中把本目录作为本地 bundle 安装（推荐，安装后改代码立即生效）：
+先把仓库克隆到本机（任意目录都可以，下面用 `<克隆目录>` 代指）：
+
+```bash
+git clone https://github.com/ren-0208/dsh-ref-develop.git
+```
+
+然后在 DSH 中把这个目录作为本地 bundle 安装（推荐，安装后改代码立即生效）：
 
 ```text
-plugin_manager action=install_bundle target=D:\文件夹库\人工智能小组作业\dsh-ref-devlop
+plugin_manager action=install_bundle target=<克隆目录>
 ```
+
+例如克隆到 `D:\plugins\dsh-ref-develop`，就写：
+
+```text
+plugin_manager action=install_bundle target=D:\plugins\dsh-ref-develop
+```
+
+> 不要拿别人的绝对路径直接抄——`target` 必须是你自己机器上仓库所在的那一层目录
+> （即含 `package.json` 和 `cordis.patch.yml` 的那一层）。
 
 或者手动组合：在 profile 的 `cordis.patch.yml` 追加
 
