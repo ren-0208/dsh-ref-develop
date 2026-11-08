@@ -124,7 +124,7 @@ DSH「设置 → 记忆与成长」：
 /growth                      状态
 /growth remember lesson 标题 :: 正文
 /growth recall 关键词
-/growth scope workspace|global
+/growth scope workspace|global|off
 /growth config personalization=true
 /growth export md|json
 /growth consolidate          立即提炼
@@ -138,6 +138,8 @@ DSH「设置 → 记忆与成长」：
 - **单工作区记忆**（`scope: workspace`）：**每个工作区各一份、互不共享**，路径 `<工作区>/.growth-note`。
   适合「只跟这个项目有关的状态、约定、踩过的坑」。
   在设置页里从已登记工作区下拉选择；`workspacePath` 为空时使用当前会话目录。
+- **无**（`scope: off`）：完全关闭记忆。不记录会话笔记、不自动提炼、不往提示词里注入内容；
+  已存下的条目原样保留，切回全局或单工作区即恢复，也不做迁移。
 
 每个工作区目录下会有独立的 `AGENTS.md`、`memory.jsonl`、`MEMORY/`、`sessions/`，
 切换工作区只切换「当前读写哪一份」，不会把 A 的条目搬进 B。
@@ -186,7 +188,7 @@ growth_config(personalization=true)
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `scope` | `global` | `global` 全局共享 / `workspace` 单工作区 |
+| `scope` | `global` | `global` 全局共享 / `workspace` 单工作区 / `off` 关闭记忆 |
 | `workspacePath` | 空 | 单工作区模式下选中的工作区目录；空 = 当前会话目录 |
 | `personalization` | `false` | 是否启用主人画像 |
 | `autoCapture` | `true` | 回合结束是否写会话笔记 |

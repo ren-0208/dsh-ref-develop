@@ -205,6 +205,37 @@ test('host wiring: sections, tools, command, routes, events and API', async () =
 
     const rejected = await fetch(`${base}/growth-note/api/entries`, { method: 'POST', body: JSON.stringify({ kind: 'preference', title: 'x', body: 'y' }) })
     assert.equal(rejected.status, 400)
+
+    // Turning memory off: no injection, no writes, no distillation. Stored data stays.
+    const offSwitch = await (
+      await fetch(`${base}/growth-note/api/config`, { method: 'POST', body: JSON.stringify({ config: { ...pickedState.config, scope: 'off' } }) })
+    ).json()
+    assert.equal(offSwitch.ok, true)
+    assert.equal(offSwitch.config.scope, 'off')
+    const offState = await (await fetch(`${base}/growth-note/api/state`)).json()
+    assert.equal(offState.enabled, false)
+    assert.match(digest(), /记忆已关闭/)
+
+    const refusedOff = await host.tools.get('growth_remember').execute({ kind: 'method', title: '不该写入', body: '关闭时不许写' }, { agent })
+    assert.match(refusedOff, /记忆已关闭/)
+    const consolidateOff = await fetch(`${base}/growth-note/api/consolidate`, { method: 'POST', body: JSON.stringify({}) })
+    assert.equal(consolidateOff.status, 409)
+
+    // turn-stopping must not even touch a store while off (no directory created).
+    await host.handlers.get('agent/turn-stopping')({ agent, turn: 7 })
+    await settle(200)
+    await assert.rejects(fs.access(path.join(otherCwd, '.growth-note')), 'off must not create a store')
+
+    // Switching back restores the global library untouched (no migration happened).
+    const back = await (
+      await fetch(`${base}/growth-note/api/config`, { method: 'POST', body: JSON.stringify({ config: { ...pickedState.config, scope: 'global' } }) })
+    ).json()
+    assert.equal(back.ok, true)
+    assert.equal(back.migration, null, 'off -> global must not migrate')
+    const backState = await (await fetch(`${base}/growth-note/api/state`)).json()
+    assert.equal(backState.enabled, true)
+    assert.equal(backState.stats.total, 2)
+    assert.match(digest(), /插件服务优先读 ctx 属性/)
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }

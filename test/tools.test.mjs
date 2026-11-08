@@ -94,6 +94,28 @@ test('growth_edit and growth_forget round-trip', async () => {
   assert.equal((await h.store.entries())[0].status, 'rejected')
 })
 
+test('growth_config can turn memory off; writes are refused until re-enabled', async () => {
+  const h = await harness()
+  await h.tools.get('growth_remember').execute({ kind: 'method', title: '先前的方法', body: '先存一条' }, h.exec)
+  assert.equal((await h.store.entries()).length, 1)
+
+  const off = await h.tools.get('growth_config').execute({ scope: 'off' }, h.exec)
+  assert.match(off, /已关闭记忆/)
+  assert.equal(h.getConfig().scope, 'off')
+
+  const refused = await h.tools.get('growth_remember').execute({ kind: 'method', title: '不该写入', body: '关闭时' }, h.exec)
+  assert.match(refused, /记忆已关闭/)
+  const status = await h.tools.get('growth_status').execute({}, h.exec)
+  assert.match(status, /无（关闭记忆）/)
+  assert.equal((await h.store.entries()).length, 1, 'off must not write')
+
+  const back = await h.tools.get('growth_config').execute({ scope: 'global' }, h.exec)
+  assert.match(back, /已重新开启记忆/)
+  const written = await h.tools.get('growth_remember').execute({ kind: 'lesson', title: '恢复后能写', body: '是的' }, h.exec)
+  assert.match(written, /已新增/)
+  assert.equal((await h.store.entries()).length, 2)
+})
+
 test('growth_export returns markdown and json', async () => {
   const h = await harness()
   await h.tools.get('growth_remember').execute({ kind: 'wp', title: 'CTF xor 复盘', body: '关键一步：恢复 key' }, h.exec)
