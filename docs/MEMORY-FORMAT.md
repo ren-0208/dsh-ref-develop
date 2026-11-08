@@ -17,7 +17,7 @@
     PLAYBOOK.md                 方法 / 否决清单 / 状态（生成）
     KNOWLEDGE.md                领域知识（生成）
     WP/INDEX.md                 题目复盘（生成）
-    PERSONA.md                  主人画像（生成）
+    PERSONA.md                  用户画像（生成）
     SESSIONS.md                 会话流水，一行一会话（追加）
   sessions/<会话id>.md          每回合的原始笔记
 ```
@@ -102,7 +102,7 @@ strength = confidence × 0.5^(ageDays / halfLifeDays)
 - `PLAYBOOK.md`：方法、否决清单、状态三类。
 - `KNOWLEDGE.md`：领域知识，按 `meta.subject` 分组。
 - `WP/INDEX.md`：题目复盘，按 `meta.platform` 分组。
-- `PERSONA.md`：主人的稳定偏好（`aspect: value`）。
+- `PERSONA.md`：用户的稳定偏好（`aspect: value`）。
 
 `SESSIONS.md` 只追加不覆盖：每个会话第一次写笔记时加一行
 `- <时间> · <会话id> · <工作目录>`。`sessions/<id>.md` 每回合追加一节，格式：

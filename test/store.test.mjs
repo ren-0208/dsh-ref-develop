@@ -141,7 +141,7 @@ test('render writes markdown views with the right sections', async () => {
   const wp = await fs.readFile(path.join(root, 'MEMORY', 'WP', 'INDEX.md'), 'utf8')
   assert.match(wp, /CTF 反转题/)
   const persona = await fs.readFile(path.join(root, 'MEMORY', 'PERSONA.md'), 'utf8')
-  assert.match(persona, /主人画像/)
+  assert.match(persona, /用户画像/)
 })
 
 test('migrateTo copies active entries and session files', async () => {

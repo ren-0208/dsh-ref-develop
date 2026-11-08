@@ -18,7 +18,7 @@ DSH 的每次新会话默认从零开始。「记忆与成长」在会话进行�
 - **双通道沉淀**：每回合以零模型成本写入会话笔记；每 N 回合调用当前会话的模型提炼结构化条目。
 - **证据化**：每条记忆必须引用原文片段。模型给出的引用无法在对话中找到时，该条目标记为「未经核实」并降权。
 - **六类记忆**：方法 `method`、教训 `lesson`（否决清单）、领域知识 `knowledge`、题目复盘 `wp`、
-  主人画像 `preference`（需显式开启）、项目状态 `state`。
+  用户画像 `preference`（需显式开启）、项目状态 `state`。
 - **按问题召回**：注入内容并非固定全量清单，而是依据本轮用户消息的关键词与条目强度挑选 top-k。
 - **强度与衰减**：置信度、使用次数与证据数量共同决定强度，强度按半衰期衰减；重复出现的教训可升级为方法。
 - **三种记忆范围**：全局记忆、单工作区记忆（可多选工作区）、无。三者相互隔离，切换不自动迁移数据。
@@ -172,7 +172,7 @@ growth_config(scope="global", migrate=true)
 
 ### 个性化匹配（可选，默认关闭）
 
-开启后，插件会额外从对话中提炼「主人画像」（沟通风格、格式偏好、关注点与禁忌），并在摘要中注入画像条目：
+开启后，插件会额外从对话中提炼「用户画像」（沟通风格、格式偏好、关注点与禁忌），并在摘要中注入画像条目：
 
 ```text
 growth_config(personalization=true)
@@ -212,7 +212,7 @@ growth_config(personalization=true)
 | --- | --- | --- |
 | `scope` | `global` | `global` 全局共享 / `workspace` 单工作区 / `off` 关闭记忆 |
 | `workspacePaths` | `[]` | 单工作区模式下启用记忆的工作区目录（可多选）；`[]` 表示不启用记忆 |
-| `personalization` | `false` | 是否启用主人画像 |
+| `personalization` | `false` | 是否启用用户画像 |
 | `autoCapture` | `true` | 回合结束时是否写会话笔记 |
 | `autoSummarize` | `true` | 是否调用模型提炼条目 |
 | `consolidateEveryTurns` | `6` | 每多少回合提炼一次 |
@@ -239,7 +239,7 @@ growth_config(personalization=true)
     PLAYBOOK.md        方法、否决清单与状态（生成）
     KNOWLEDGE.md       领域知识（生成）
     WP/INDEX.md        题目复盘（生成）
-    PERSONA.md         主人画像（生成）
+    PERSONA.md         用户画像（生成）
     SESSIONS.md        会话流水，一行一会话（追加）
   sessions/<id>.md     每回合的原始笔记
 ```
