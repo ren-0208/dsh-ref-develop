@@ -7,7 +7,7 @@
 
 ```text
 <root>/                         全局：$DSH_HOME/growth-note/global
-                               工作区：<cwd>/.growth-note
+                               工作区：<所选工作区>/.growth-note（会话目录须在所选工作区内）
   AGENTS.md                     入口说明（首次创建时写入，之后不覆盖）
   memory.jsonl                  权威数据：一行一个条目
   store.json                    存储版本与元信息 {"version":2}
@@ -131,7 +131,7 @@ strength = confidence × 0.5^(ageDays / halfLifeDays)
 本轮问题：cordis 服务怎么注入
 
 ### 状态（1）
-1. **growth-note 已到 v2** (dsh-ref-devlop · 进行中) · 置信80%
+1. **dsh-ref-develop 已到 v2** (dsh-ref-develop · 进行中) · 置信80%
    还剩文档与安装验证。
 ```
 
