@@ -4,7 +4,16 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { buildSessionNote, Consolidator, eventsText, extractJsonArray, validateItems } from '../lib/consolidate.js'
+import {
+  buildDistillPrompt,
+  buildSessionNote,
+  budgetNotes,
+  Consolidator,
+  DISTILL_INPUT_BUDGET,
+  eventsText,
+  extractJsonArray,
+  validateItems,
+} from '../lib/consolidate.js'
 import { CONFIG_DEFAULTS } from '../lib/config.js'
 import { GrowthStore } from '../lib/store.js'
 
@@ -174,4 +183,52 @@ test('eventsText reads message text but not tool arguments', () => {
   assert.match(text, /命令失败原因/)
   assert.match(text, /助手结论/)
   assert.doesNotMatch(text, /huge payload/)
+})
+
+test('distillation input is bounded and keeps the newest notes', () => {
+  // Regression: the output was capped at maxTokens but the input never was, so a
+  // long session either got rejected by the provider or was silently truncated —
+  // typically cutting the newest, most relevant turns.
+  const notes = Array.from({ length: 6 }, (_, i) => `## turn ${i}\n\n${'很长的笔记内容'.repeat(700)}`).join('\n')
+  assert.ok(notes.length > DISTILL_INPUT_BUDGET)
+  const prompt = buildDistillPrompt(notes)
+  const injected = prompt.slice(prompt.indexOf('会话记录：'))
+  assert.ok(injected.length <= DISTILL_INPUT_BUDGET + 40, `injected ${injected.length}`)
+  assert.match(injected, /## turn 5/)
+  assert.doesNotMatch(injected, /## turn 0\n/)
+})
+
+test('budgetNotes keeps a single oversized note by trimming it', () => {
+  const huge = `## turn 1\n\n${'x'.repeat(5000)}`
+  const out = budgetNotes(huge, { maxChars: 500 })
+  assert.ok(out.length <= 500)
+  assert.match(out, /## turn 1/)
+})
+
+test('a consolidation cursor lets a missed turn be distilled later', async () => {
+  // Regression: `turn % consolidateEveryTurns === 0` dropped a turn permanently
+  // if that one turn-stopping never fired, because the next run only read the
+  // newest N notes.
+  const store = await tempStore()
+  for (let turn = 0; turn < 8; turn += 1) {
+    await store.appendSessionNote('cursor', `## turn ${turn}\n\n- 用户：第 ${turn} 轮\n`, { turn })
+  }
+  await store.writeConsolidationCursor('cursor', 0)
+  for (let turn = 8; turn < 13; turn += 1) {
+    await store.appendSessionNote('cursor', `## turn ${turn}\n\n- 用户：第 ${turn} 轮\n`, { turn })
+  }
+  assert.equal(await store.readConsolidationCursor('cursor'), 0)
+  const pending = await store.readPendingNotes('cursor', 20)
+  assert.match(pending, /## turn 1\n/)
+  assert.match(pending, /## turn 5\n/)
+  assert.match(pending, /## turn 12\n/)
+  assert.doesNotMatch(pending, /## turn 0\n/)
+})
+
+test('readPendingNotes falls back to the newest window without a cursor', async () => {
+  const store = await tempStore()
+  for (let turn = 0; turn < 10; turn += 1) await store.appendSessionNote('nocursor', `## turn ${turn}\n\nx\n`, { turn })
+  const pending = await store.readPendingNotes('nocursor', 3)
+  assert.match(pending, /## turn 9/)
+  assert.doesNotMatch(pending, /## turn 6\n/)
 })

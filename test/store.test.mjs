@@ -293,3 +293,105 @@ test('active entries are never evicted by the archive caps', async () => {
   assert.equal(stats.total, 5)
   assert.equal(stats.archived, 0)
 })
+
+test('touchEntry does not rewrite the memory views', async () => {
+  // Regression: a recall is a read. Bumping useCount redrew five Markdown files.
+  const { root, store } = await tempStore()
+  const created = await store.addEntry({ kind: 'method', title: '被召回', body: 'b' })
+  const viewDir = path.join(root, 'MEMORY')
+  const stamp = async () => {
+    const out = {}
+    for (const name of await fs.readdir(viewDir)) out[name] = (await fs.stat(path.join(viewDir, name))).mtimeMs
+    return out
+  }
+  const before = await stamp()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await store.touchEntry([created.entry.id])
+  await store.flushTouches()
+  assert.deepEqual(await stamp(), before, 'views must not be rewritten')
+  const [entry] = await store.load()
+  assert.equal(entry.useCount, 1)
+})
+
+test('vector appends are incremental, not full rewrites', async () => {
+  // Regression: every upsertVectors serialised and rewrote the whole index, and
+  // the backfill feeds 16 rows at a time (~19x write amplification measured).
+  const { root, store } = await tempStore()
+  const ids = []
+  for (let i = 0; i < 40; i += 1) {
+    const created = await store.addEntry({ kind: 'method', title: `唯一标题-${i}-${Math.random().toString(36).slice(2, 9)}`, body: 'b' })
+    ids.push(created.entry.id)
+  }
+  const file = path.join(root, 'vectors.jsonl')
+  for (let offset = 0; offset < ids.length; offset += 16) {
+    const batch = ids.slice(offset, offset + 16)
+    await store.upsertVectors(batch.map((id) => ({ id, sig: 'openai:m', vec: [1, 0] })))
+    // 16 rows of a 2-float vector is well under a kilobyte; a full rewrite of the
+    // batch's predecessors would show up as a jump far beyond one batch.
+    const size = (await fs.stat(file)).size
+    assert.ok(size < 40 * 400, `vectors.jsonl grew to ${size} bytes at offset ${offset}`)
+  }
+  const loaded = await store.loadVectors({ force: true })
+  assert.equal(loaded.size, ids.length)
+  for (const id of ids) assert.ok(loaded.has(id))
+})
+
+test('compaction collapses duplicate vector rows and keeps the newest value', async () => {
+  const { root, store } = await tempStore()
+  const created = await store.addEntry({ kind: 'method', title: 'x', body: 'b' })
+  const id = created.entry.id
+  for (let i = 0; i < 700; i += 1) await store.upsertVectors([{ id, sig: 'openai:m', vec: [i + 1, 0] }])
+  const file = path.join(root, 'vectors.jsonl')
+  const rows = (await fs.readFile(file, 'utf8')).split('\n').filter(Boolean)
+  assert.ok(rows.length < 700, `compaction did not run: ${rows.length} rows`)
+  const loaded = await store.loadVectors({ force: true })
+  assert.equal(loaded.size, 1)
+  assert.equal(loaded.get(id).vec[0], 700)
+})
+
+test('vectorsComplete reports whether the index needs work', async () => {
+  const { store } = await tempStore()
+  const created = await store.addEntry({ kind: 'method', title: 'y', body: 'b' })
+  await store.loadVectors()
+  assert.equal(store.vectorsComplete('openai:m'), false)
+  await store.upsertVectors([{ id: created.entry.id, sig: 'openai:m', vec: [1, 0] }])
+  assert.equal(store.vectorsComplete('openai:m'), true)
+  assert.equal(store.vectorsComplete('openai:other'), false)
+  // A new active entry invalidates the answer.
+  await store.addEntry({ kind: 'method', title: 'z', body: 'b' })
+  assert.equal(store.vectorsComplete('openai:m'), false)
+})
+
+test('touchEntry coalesces into one deferred write', async () => {
+  // Regression: every recall rewrote a multi-megabyte memory.jsonl.
+  const { root, store } = await tempStore()
+  const created = await store.addEntry({ kind: 'method', title: '被召回', body: 'b' })
+  const file = path.join(root, 'memory.jsonl')
+  const before = (await fs.stat(file)).mtimeMs
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await store.touchEntry([created.entry.id])
+  assert.equal((await fs.stat(file)).mtimeMs, before, 'touch must not write immediately')
+  await store.flushTouches()
+  const onDisk = JSON.parse((await fs.readFile(file, 'utf8')).trim())
+  assert.equal(onDisk.useCount, 1)
+})
+
+test('pending touches survive a forced reload', async () => {
+  // A forced re-read must not silently roll back counters that `touchEntry`
+  // applied in memory but has not flushed yet.
+  const { store } = await tempStore()
+  const created = await store.addEntry({ kind: 'method', title: 'a', body: 'b' })
+  await store.touchEntry([created.entry.id])
+  await store.addEntry({ kind: 'method', title: 'trigger', body: 'b' })
+  const entries = await store.load({ force: true })
+  assert.equal(entries.find((entry) => entry.id === created.entry.id).useCount, 1)
+})
+
+test('concurrent touches accumulate without losing increments', async () => {
+  const { root, store } = await tempStore()
+  const created = await store.addEntry({ kind: 'method', title: 'b', body: 'b' })
+  await Promise.all([store.touchEntry([created.entry.id]), store.touchEntry([created.entry.id]), store.touchEntry([created.entry.id])])
+  await store.flushTouches()
+  const onDisk = JSON.parse((await fs.readFile(path.join(root, 'memory.jsonl'), 'utf8')).trim())
+  assert.equal(onDisk.useCount, 3)
+})
