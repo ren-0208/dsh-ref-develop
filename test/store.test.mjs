@@ -223,3 +223,73 @@ test('vectors for unknown entries are never persisted', async () => {
   const stats = await store.vectorStats()
   assert.equal(stats.total, 0)
 })
+
+test('session notes rotate so one long session cannot grow without bound', async () => {
+  // Regression: notes were append-only. A long session grew the file forever and
+  // every consolidation re-read all of it.
+  const { root, store } = await tempStore({ maxNoteTurns: 50 })
+  for (let turn = 0; turn < 300; turn += 1) {
+    await store.appendSessionNote('sess', `## turn ${turn}\n\n- 用户：${'z'.repeat(400)}\n`, { turn })
+  }
+  const text = await fs.readFile(path.join(root, 'sessions', 'sess.md'), 'utf8')
+  const sections = text.split(/\n(?=## )/).filter(Boolean)
+  assert.ok(sections.length <= 50 + 13, `rotated file kept ${sections.length} sections`)
+  assert.match(text, /## turn 299/)
+  assert.doesNotMatch(text, /## turn 0\n/)
+})
+
+test('readSessionNotes returns the newest sections from the tail', async () => {
+  const { store } = await tempStore({ maxNoteTurns: 500 })
+  for (let turn = 0; turn < 40; turn += 1) {
+    await store.appendSessionNote('s2', `## turn ${turn}\n\nbody ${turn}\n`, { turn })
+  }
+  const notes = await store.readSessionNotes('s2', 3)
+  assert.match(notes, /## turn 39/)
+  assert.match(notes, /## turn 37/)
+  assert.doesNotMatch(notes, /## turn 36\n/)
+  assert.equal(await store.readSessionNotes('missing', 3), '')
+})
+
+test('archived entries are capped instead of living for 120 days', async () => {
+  // Regression: soft deletes piled up until they outnumbered live entries, and
+  // every addEntry re-read the whole file.
+  const { store } = await tempStore({ maxArchivedEntries: 20 })
+  for (let i = 0; i < 50; i += 1) {
+    const created = await store.addEntry({ kind: 'method', title: `t${i}`, body: 'b' })
+    await store.removeEntry(created.entry.id)
+  }
+  const stats = await store.stats()
+  assert.equal(stats.total, 0)
+  assert.ok(stats.archived <= 20, `archived=${stats.archived}`)
+})
+
+test('archiveRetentionDays drops old tombstones', async () => {
+  const { root, store } = await tempStore({ archiveRetentionDays: 1 })
+  const created = await store.addEntry({ kind: 'method', title: 'old', body: 'b' })
+  await store.removeEntry(created.entry.id)
+  // Age the tombstone on disk: addEntry re-reads with `force`, so an in-memory
+  // edit would be discarded before pruning ever saw it.
+  const file = path.join(root, 'memory.jsonl')
+  const lines = (await fs.readFile(file, 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+  const tomb = lines.find((entry) => entry.id === created.entry.id)
+  assert.equal(tomb.status, 'rejected')
+  tomb.updatedAt = new Date(Date.now() - 10 * 86_400_000).toISOString()
+  await fs.writeFile(file, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`, 'utf8')
+  store.cache = null
+
+  await store.addEntry({ kind: 'method', title: 'trigger save', body: 'b' })
+  const after = await store.load({ force: true })
+  assert.equal(after.some((entry) => entry.id === created.entry.id), false)
+  assert.ok(after.some((entry) => entry.title === 'trigger save'))
+})
+
+test('active entries are never evicted by the archive caps', async () => {
+  const { store } = await tempStore({ maxArchivedEntries: 0 })
+  for (let i = 0; i < 5; i += 1) await store.addEntry({ kind: 'method', title: `keep${i}`, body: 'b' })
+  const stats = await store.stats()
+  assert.equal(stats.total, 5)
+  assert.equal(stats.archived, 0)
+})

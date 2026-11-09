@@ -124,3 +124,34 @@ test('selectForDigest keeps a semantic-only match out of the filler bucket', () 
   assert.equal(groups.method.length, 1)
   assert.equal(matched, 1)
 })
+
+test('scoreEntry caches tokenisation but still honours edits', async () => {
+  // Regression: every prompt assembly retokenised every entry title and body.
+  // The cache must be keyed on id + updatedAt so an edited entry re-tokenises.
+  const { scoreEntry, tokenize, clearTokenCache } = await import('../lib/util.js')
+  const entry = {
+    id: 'mg-cache',
+    title: '逆向调试断点',
+    body: '用 x64dbg 在断点处查看寄存器',
+    tags: ['逆向'],
+    createdAt: new Date().toISOString(),
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  }
+  const tokens = tokenize('断点')
+  clearTokenCache()
+  const first = scoreEntry(entry, tokens)
+  assert.ok(first > 0)
+  assert.equal(scoreEntry(entry, tokens), first)
+
+  // Same id, new content: the stale cached tokens must not be reused.
+  const edited = { ...entry, body: '完全换了正文，不再提到那个词', updatedAt: '2026-02-02T00:00:00.000Z' }
+  const after = scoreEntry(edited, tokens)
+  assert.ok(after < first)
+  clearTokenCache()
+})
+
+test('scoreEntry uncached fallback works without an id', async () => {
+  const { scoreEntry, tokenize } = await import('../lib/util.js')
+  const entry = { title: '断点调试', body: 'x', tags: [], createdAt: new Date().toISOString() }
+  assert.ok(scoreEntry(entry, tokenize('断点')) > 0)
+})

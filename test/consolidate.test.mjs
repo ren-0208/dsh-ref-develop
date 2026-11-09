@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { buildSessionNote, Consolidator, extractJsonArray, validateItems } from '../lib/consolidate.js'
+import { buildSessionNote, Consolidator, eventsText, extractJsonArray, validateItems } from '../lib/consolidate.js'
 import { CONFIG_DEFAULTS } from '../lib/config.js'
 import { GrowthStore } from '../lib/store.js'
 
@@ -143,4 +143,35 @@ test('Consolidator only distills on the configured cadence', async () => {
   const early = await consolidator.run({ agent, turn: 2 })
   assert.equal(early.reason, 'not-yet')
   assert.match(await store.readSessionNotes('a3', 2), /turn 2/)
+})
+
+test('evidence is verified against raw events, not the lossy note', () => {
+  // Regression: notes truncate each user line to 400 chars. A model quoting the
+  // transcript it actually saw was marked unverified (confidence halved) because
+  // the note summariser had already trimmed the quote away.
+  const longUser = `${'A'.repeat(880)}正确的结论是先做最小复现再扩大到全量数据${'B'.repeat(300)}`
+  const quote = '正确的结论是先做最小复现再扩大到全量数据'
+  const turnEvents = [{ type: 'user/message', data: { turn: 1, content: [{ type: 'text', text: longUser }] } }]
+  const note = buildSessionNote({ sessionId: 's', turn: 1, events: turnEvents })
+  const item = { kind: 'method', title: 't', body: 'b', confidence: 0.8, evidence: [{ quote }] }
+
+  const viaNote = validateItems([item], note)
+  assert.equal(viaNote[0].verified, false, 'the note really did drop the quote')
+
+  const viaEvents = validateItems([item], eventsText(turnEvents))
+  assert.equal(viaEvents[0].verified, true)
+  assert.equal(viaEvents[0].confidence, 0.8)
+})
+
+test('eventsText reads message text but not tool arguments', () => {
+  const text = eventsText([
+    { type: 'user/message', data: { content: [{ type: 'text', text: '诉求正文' }] } },
+    { type: 'tool/call', data: { name: 'bash', arguments: '{"command":"huge payload"}' } },
+    { type: 'tool/result', data: { error: '命令失败原因' } },
+    { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '助手结论' }] } } },
+  ])
+  assert.match(text, /诉求正文/)
+  assert.match(text, /命令失败原因/)
+  assert.match(text, /助手结论/)
+  assert.doesNotMatch(text, /huge payload/)
 })
