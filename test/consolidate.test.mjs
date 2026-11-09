@@ -278,3 +278,58 @@ test('the cursor advances to the batch, not the current turn', async () => {
   assert.match(next.text, /## turn 7\n/)
   assert.equal(next.throughTurn, 12)
 })
+
+test('an empty distillation does not advance the cursor', async () => {
+  // Regression: `addEntries([])` succeeds, so the cursor advanced past turns whose
+  // notes produced no entries — silently losing them. A model that answers "[]" or
+  // returns unparseable JSON used to burn the whole backlog.
+  const store = await tempStore()
+  for (let turn = 1; turn <= 6; turn += 1) {
+    await store.appendSessionNote('empty', `## turn ${turn}\n\nx\n`, { turn })
+  }
+  const consolidator = new Consolidator(fakeRuntime(store, { reply: '[]' }))
+  const result = await consolidator.run({ agent: { id: 'empty' }, turn: 3, force: true })
+  assert.equal(result.reason, 'no-candidates')
+  assert.equal(await store.readConsolidationCursor('empty'), null)
+  assert.match((await store.readPendingNotes('empty', 20)).text, /## turn 1\n/)
+})
+
+test('unparseable model output does not advance the cursor', async () => {
+  const store = await tempStore()
+  for (let turn = 1; turn <= 6; turn += 1) {
+    await store.appendSessionNote('badjson', `## turn ${turn}\n\nx\n`, { turn })
+  }
+  const consolidator = new Consolidator(fakeRuntime(store, { reply: '这不是 JSON' }))
+  const result = await consolidator.run({ agent: { id: 'badjson' }, turn: 3, force: true })
+  assert.equal(result.candidates, 0)
+  assert.equal(await store.readConsolidationCursor('badjson'), null)
+})
+
+test('repeated empty distillations eventually give up instead of looping', async () => {
+  // The opposite failure: protecting the batch forever would re-distil the same
+  // notes on every turn when the model simply has nothing to say.
+  const store = await tempStore()
+  for (let turn = 1; turn <= 6; turn += 1) {
+    await store.appendSessionNote('stuck', `## turn ${turn}\n\nx\n`, { turn })
+  }
+  const consolidator = new Consolidator(fakeRuntime(store, { reply: '[]' }))
+  const agent = { id: 'stuck' }
+  const reasons = []
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    reasons.push((await consolidator.run({ agent, turn: 3, force: true })).reason)
+  }
+  assert.deepEqual(reasons.slice(0, 2), ['no-candidates', 'no-candidates'])
+  assert.equal(await store.readConsolidationCursor('stuck'), 6, 'third attempt moves on')
+})
+
+test('disposing an agent clears its consolidator state', async () => {
+  const store = await tempStore()
+  const consolidator = new Consolidator(fakeRuntime(store, { reply: '[]' }))
+  const agent = { id: 'gone' }
+  await store.appendSessionNote('gone', '## turn 1\n\nx\n', { turn: 1 })
+  await consolidator.run({ agent, turn: 1, force: true })
+  assert.ok(consolidator.emptyRuns.has('gone'))
+  consolidator.forgetAgent('gone')
+  assert.equal(consolidator.emptyRuns.has('gone'), false)
+  assert.equal(consolidator.lastTurn.has('gone'), false)
+})

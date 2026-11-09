@@ -502,3 +502,30 @@ test('render is a no-op when nothing the views show changed', async () => {
   await store.render()
   assert.deepEqual(await stamp(), before)
 })
+
+test('hard delete survives a restart', async () => {
+  // Regression: appending nothing cannot express a removal, so the original line
+  // stayed in the log and `load` read the "deleted" entry straight back. A hard
+  // delete (growth_forget hard=true) is how a user removes something they consider
+  // sensitive — resurrecting it on the next start is the worst possible failure.
+  const { root, store } = await tempStore()
+  const created = await store.addEntry({ kind: 'method', title: '要彻底删掉的', body: '敏感内容' })
+  await store.removeEntry(created.entry.id, { soft: false })
+  assert.equal((await store.load()).length, 0)
+
+  const restarted = new GrowthStore(root)
+  await restarted.ensure()
+  const after = await restarted.load()
+  assert.equal(after.length, 0, 'the entry must not come back after a restart')
+})
+
+test('hard delete drops the vector too', async () => {
+  const { root, store } = await tempStore()
+  const created = await store.addEntry({ kind: 'method', title: 'x', body: 'b' })
+  await store.upsertVectors([{ id: created.entry.id, sig: 'openai:m', vec: [1, 0] }])
+  await store.removeEntry(created.entry.id, { soft: false })
+  const restarted = new GrowthStore(root)
+  await restarted.ensure()
+  const vectors = await restarted.loadVectors({ force: true })
+  assert.equal(vectors.has(created.entry.id), false)
+})

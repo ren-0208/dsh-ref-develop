@@ -200,3 +200,44 @@ test('the reserved cross-library seam stays inert', async () => {
   // Multi-library must fail loudly rather than silently returning partial results.
   assert.throws(() => collectCandidates([[{ id: 'a' }], [{ id: 'b' }]]), /reserved/)
 })
+
+test('oneLine matches the naive implementation it was optimised from', async () => {
+  // The bounded-prefix version exists only to avoid running a global regex over
+  // multi-kilobyte bodies. It must stay observationally identical, otherwise
+  // rendered views and prompt digests would silently differ from the naive result.
+  const { oneLine } = await import('../lib/util.js')
+  const naive = (value, max = 200) => {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim()
+    return text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`
+  }
+  // Every `max` the codebase actually uses.
+  const maxes = [10, 40, 50, 60, 80, 100, 110, 120, 140, 160, 200, 220, 300, 400, 2000]
+  const alphabet = ['a', 'b', ' ', '\n', '\t', '中', '\r\n']
+  const cases = [
+    '', ' ', '\n\n\n', 'a', '  a   b  ',
+    'x'.repeat(10000),
+    ' '.repeat(5000) + 'tail',
+    `${'a'.repeat(300)} ${' '.repeat(2000)}b`,
+    `${'x'.repeat(220)}${' '.repeat(5000)}rest`,
+  ]
+  for (let i = 0; i < 400; i += 1) {
+    const length = Math.floor(Math.random() * 4000)
+    let text = ''
+    for (let k = 0; k < length; k += 1) text += alphabet[Math.floor(Math.random() * alphabet.length)]
+    cases.push(text)
+  }
+  for (const text of cases) {
+    for (const max of maxes) {
+      assert.equal(oneLine(text, max), naive(text, max), `max=${max} input=${JSON.stringify(text.slice(0, 40))}`)
+    }
+  }
+})
+
+test('oneLine never hides a truncation', async () => {
+  // A string that is exactly `max` long and has no ellipsis reads as "complete".
+  const { oneLine } = await import('../lib/util.js')
+  const dense = 'x'.repeat(220)
+  const spaced = `${dense}${' '.repeat(5000)}tail`
+  assert.ok(oneLine(spaced, 220).endsWith('…'), 'a truncated body must say so')
+  assert.equal(oneLine(dense, 220), dense, 'an exactly-fitting body needs no ellipsis')
+})
