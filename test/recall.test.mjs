@@ -108,7 +108,9 @@ test('without vectors recall behaves exactly like lexical scoring', () => {
   const entry = normalizeEntry({ kind: 'method', title: 'cordis 注入', body: 'ctx.tools' })
   const plain = rankEntries([entry], { tokens: new Set(['cordis']) })
   const withNullVectors = rankEntries([entry], { tokens: new Set(['cordis']), vectors: null, queryVector: null })
-  assert.equal(plain[0].score, withNullVectors[0].score)
+  // The recency bonus is evaluated against the wall clock, so replicate calls can
+  // differ in the low bits; the contract is "same score", not "same float".
+  assert.ok(Math.abs(plain[0].score - withNullVectors[0].score) < 1e-6)
   assert.equal(withNullVectors[0].semantic, 0)
 })
 
@@ -141,12 +143,29 @@ test('scoreEntry caches tokenisation but still honours edits', async () => {
   clearTokenCache()
   const first = scoreEntry(entry, tokens)
   assert.ok(first > 0)
-  assert.equal(scoreEntry(entry, tokens), first)
+  // The recency bonus reads the clock, so two calls can differ in the last bits.
+  assert.ok(Math.abs(scoreEntry(entry, tokens) - first) < 1e-6)
 
   // Same id, new content: the stale cached tokens must not be reused.
   const edited = { ...entry, body: '完全换了正文，不再提到那个词', updatedAt: '2026-02-02T00:00:00.000Z' }
   const after = scoreEntry(edited, tokens)
   assert.ok(after < first)
+  clearTokenCache()
+})
+
+test('the token cache never serves tokens for different entry text', async () => {
+  // The real hazard of caching by id: a same-id rewrite that forgets to bump
+  // updatedAt would silently keep scoring against the old body.
+  const { scoreEntry, tokenize, clearTokenCache } = await import('../lib/util.js')
+  const stamp = { createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }
+  const a = { id: 'mg-x', title: 'cordis', body: '注入服务', tags: [], ...stamp }
+  const b = { id: 'mg-y', title: 'cordis', body: '注入服务', tags: [], ...stamp }
+  clearTokenCache()
+  assert.deepEqual(tokenize('cordis 注入'), tokenize('cordis 注入'))
+  const hitA = scoreEntry(a, tokenize('注入'))
+  const hitB = scoreEntry(b, tokenize('注入'))
+  // Different ids must not share a cache slot.
+  assert.ok(Math.abs(hitA - hitB) < 1e-6)
   clearTokenCache()
 })
 

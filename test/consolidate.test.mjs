@@ -219,16 +219,62 @@ test('a consolidation cursor lets a missed turn be distilled later', async () =>
   }
   assert.equal(await store.readConsolidationCursor('cursor'), 0)
   const pending = await store.readPendingNotes('cursor', 20)
-  assert.match(pending, /## turn 1\n/)
-  assert.match(pending, /## turn 5\n/)
-  assert.match(pending, /## turn 12\n/)
-  assert.doesNotMatch(pending, /## turn 0\n/)
+  assert.match(pending.text, /## turn 1\n/)
+  assert.match(pending.text, /## turn 5\n/)
+  assert.match(pending.text, /## turn 12\n/)
+  assert.doesNotMatch(pending.text, /## turn 0\n/)
+  assert.equal(pending.throughTurn, 12)
 })
 
-test('readPendingNotes falls back to the newest window without a cursor', async () => {
+test('readPendingNotes without a cursor starts from the first turn', async () => {
+  // A session's first consolidation drains the backlog from the beginning. Seeding
+  // from the tail would advance the cursor past turns never distilled.
   const store = await tempStore()
   for (let turn = 0; turn < 10; turn += 1) await store.appendSessionNote('nocursor', `## turn ${turn}\n\nx\n`, { turn })
   const pending = await store.readPendingNotes('nocursor', 3)
-  assert.match(pending, /## turn 9/)
-  assert.doesNotMatch(pending, /## turn 6\n/)
+  assert.match(pending.text, /## turn 0\n/)
+  assert.match(pending.text, /## turn 2\n/)
+  assert.doesNotMatch(pending.text, /## turn 3\n/)
+  assert.equal(pending.throughTurn, 2)
+})
+
+test('readPendingNotes reports nothing once the backlog is drained', async () => {
+  const store = await tempStore()
+  for (let turn = 0; turn < 5; turn += 1) await store.appendSessionNote('done', `## turn ${turn}\n\nx\n`, { turn })
+  await store.writeConsolidationCursor('done', 4)
+  const pending = await store.readPendingNotes('done', 6)
+  assert.equal(pending.text, '')
+  assert.equal(pending.throughTurn, null)
+})
+
+test('a backlog is drained oldest-first, a batch at a time', async () => {
+  // Regression: taking the newest N of the *pending* set skipped older pending
+  // turns, which is the very drop the cursor exists to prevent.
+  const store = await tempStore()
+  for (let turn = 1; turn <= 20; turn += 1) await store.appendSessionNote('backlog', `## turn ${turn}\n\nx\n`, { turn })
+  await store.writeConsolidationCursor('backlog', 0)
+
+  const covered = []
+  for (let run = 0; run < 4; run += 1) {
+    const batch = await store.readPendingNotes('backlog', 6)
+    const turns = [...batch.text.matchAll(/## turn (\d+)/g)].map((match) => Number(match[1]))
+    covered.push(...turns)
+    // The cursor advances to what was actually distilled, never to "now".
+    await store.writeConsolidationCursor('backlog', batch.throughTurn)
+  }
+  assert.deepEqual(covered, Array.from({ length: 20 }, (_, i) => i + 1))
+})
+
+test('the cursor advances to the batch, not the current turn', async () => {
+  // Regression: writing `turn` after distilling an older batch skipped everything
+  // between that batch and now.
+  const store = await tempStore()
+  for (let turn = 1; turn <= 30; turn += 1) await store.appendSessionNote('adv', `## turn ${turn}\n\nx\n`, { turn })
+  await store.writeConsolidationCursor('adv', 0)
+  const batch = await store.readPendingNotes('adv', 6)
+  assert.equal(batch.throughTurn, 6)
+  await store.writeConsolidationCursor('adv', batch.throughTurn)
+  const next = await store.readPendingNotes('adv', 6)
+  assert.match(next.text, /## turn 7\n/)
+  assert.equal(next.throughTurn, 12)
 })

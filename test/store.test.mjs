@@ -395,3 +395,20 @@ test('concurrent touches accumulate without losing increments', async () => {
   const onDisk = JSON.parse((await fs.readFile(path.join(root, 'memory.jsonl'), 'utf8')).trim())
   assert.equal(onDisk.useCount, 3)
 })
+
+test('pruning entries also drops their vectors', async () => {
+  // Regression: eviction by maxEntries dropped the memory row but left its vector
+  // on disk forever — skipped by recall, still decoded on every load.
+  const { store } = await tempStore({ maxEntries: 20, maxArchivedEntries: 0 })
+  for (let i = 0; i < 60; i += 1) {
+    const title = [...Array(4)].map(() => Math.random().toString(36).slice(2, 8)).join('-')
+    const created = await store.addEntry({ kind: 'method', title, body: 'b' })
+    await store.upsertVectors([{ id: created.entry.id, sig: 'openai:m', vec: [1, 0] }])
+  }
+  const active = await store.activeEntries()
+  assert.ok(active.length <= 20)
+  const vectors = await store.loadVectors({ force: true })
+  const stats = await store.vectorStats()
+  assert.equal(vectors.size, stats.covered, 'no orphan vectors may remain')
+  for (const entry of active) assert.ok(vectors.has(entry.id))
+})
