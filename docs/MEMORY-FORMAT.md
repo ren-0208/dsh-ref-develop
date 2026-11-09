@@ -39,7 +39,8 @@
 | `confidence` | number | 0–1，默认 0.6；合并时 +0.05，上限 0.95 |
 | `status` | string | `active` / `superseded`（被新偏好取代）/ `rejected`（软删除） |
 | `verified` | boolean | 证据片段是否能在对话里找到 |
-| `useCount` | number | 被 `growth_recall` 命中的次数 |
+| `useCount` | number | 被 `growth_recall` 命中的次数（只影响强度，不参与教训升级） |
+| `corroborations` | number | 被独立重现的次数（新建=1，每次合并 +1）；旧数据缺该字段时按证据数补 |
 | `createdAt` / `updatedAt` | ISO string | 创建 / 最后修改 |
 | `lastUsedAt` | ISO string \| null | 最后一次命中 |
 | `source` | object \| null | `{sessionId, turn, cwd, url, title}`，线索出处 |
@@ -73,7 +74,10 @@
 4. 其余情况 → 新增条目。
 
 合并时：正文去重拼接（≤8000 字）、标签并集、置信度 +0.05、证据并集（≤8 条）、
-刷新 `updatedAt`，并把来源 id 记进 `mergedFrom`。
+`corroborations` +1，刷新 `updatedAt`，并把来源 id 记进 `mergedFrom`。
+
+`corroborations` 单独计数而不复用证据数，是因为证据有 8 条上限：撑满后再合并不会
+再增加信用，教训就会停在「永远差一次」的状态。
 
 ## 强度与淘汰
 
@@ -87,13 +91,22 @@ strength = confidence × 0.5^(ageDays / halfLifeDays)
 - `strength` 低于 `minConfidence`（默认 0.35）的条目不进入召回候选。
 - 超过 `maxEntries`（默认 3000）时按 `strength` 升序淘汰；
   `preference` 与 `state` 永不因条数被淘汰。
-- `status: rejected` 且超过 120 天未更新 → 物理删除。
+- 归档条目（`rejected` / `superseded`）受两道限制：超过 `archiveRetentionDays`（默认 30 天）
+  未更新则丢弃，且总数不超过 `maxArchivedEntries`（默认 300），超出按 `updatedAt` 保留较新的。
+  归档永远不会挤掉活跃条目。
 
 ## 教训升级为方法
 
-同一 `lesson` 被重复提及时 `confidence` 升高；当它的证据数或重复次数达到
-`promoteLessonAfter`（默认 3）时，自动生成一条 `method`：
-标题沿用、正文加前缀、`promotedFrom` 指向原 lesson。
+同一 `lesson` 被重新提炼到时 `corroborations` 递增；该计数达到 `promoteLessonAfter`
+（默认 3）时，自动生成一条 `method`：标题沿用、正文加前缀、`promotedFrom` 指向原 lesson。
+
+**不使用 `useCount`。** `useCount` 统计的是「被召回了几次」，而不是「又被踩到了几次」：
+反复查询同一教训不代表它被反复验证，拿它当升级依据会把常被引用的教训变成没人复核的方法。
+
+## 会话笔记轮转
+
+`sessions/<id>.md` 每个会话一个文件，保留最近 `maxNoteTurns`（默认 200）个回合，
+超出后在写入时原子重写并丢弃最老的段落。提炼时只读文件尾部，不再全量加载。
 
 ## vectors.jsonl（可选）
 
