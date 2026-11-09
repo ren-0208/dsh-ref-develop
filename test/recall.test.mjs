@@ -174,3 +174,29 @@ test('scoreEntry uncached fallback works without an id', async () => {
   const entry = { title: '断点调试', body: 'x', tags: [], createdAt: new Date().toISOString() }
   assert.ok(scoreEntry(entry, tokenize('断点')) > 0)
 })
+
+test('oneLine keeps its contract after the bounded-prefix optimisation', async () => {
+  // The whitespace collapse runs on a bounded window now, so the edge cases where
+  // the prefix is not representative must still behave exactly as before.
+  const { oneLine } = await import('../lib/util.js')
+  assert.equal(oneLine('  a   b  '), 'a b')
+  assert.equal(oneLine('', 10), '')
+  assert.equal(oneLine('   ', 10), '')
+  assert.equal(oneLine('x'.repeat(5000), 100).length, 100)
+  assert.ok(oneLine('x'.repeat(5000), 100).endsWith('…'))
+  // Mostly whitespace, then real content: must not collapse to an empty string.
+  assert.match(oneLine(`${' '.repeat(2000)}target${'z'.repeat(2000)}`, 50), /^target/)
+  // Short input is returned verbatim after collapsing.
+  assert.equal(oneLine('hello world', 50), 'hello world')
+})
+
+test('the reserved cross-library seam stays inert', async () => {
+  const { crossLibraryProvider, collectCandidates } = await import('../lib/recall.js')
+  // Single library is the only supported shape today.
+  assert.equal(crossLibraryProvider, null)
+  assert.deepEqual(collectCandidates([]), [])
+  assert.deepEqual(collectCandidates([[]]), [])
+  assert.deepEqual(collectCandidates([[{ id: 'a' }]]), [{ id: 'a' }])
+  // Multi-library must fail loudly rather than silently returning partial results.
+  assert.throws(() => collectCandidates([[{ id: 'a' }], [{ id: 'b' }]]), /reserved/)
+})

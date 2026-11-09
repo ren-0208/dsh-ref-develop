@@ -14,6 +14,15 @@ async function tempStore(options = {}) {
   return { home, root, store }
 }
 
+/** The live row for `id` on disk: memory.jsonl is an append log, last line wins. */
+async function onDiskEntry(root, id) {
+  const rows = (await fs.readFile(path.join(root, 'memory.jsonl'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+  return [...rows].reverse().find((entry) => entry.id === id)
+}
+
 test('ensure creates the documented layout', async () => {
   const { root, store } = await tempStore()
   const files = await fs.readdir(root)
@@ -268,16 +277,14 @@ test('archiveRetentionDays drops old tombstones', async () => {
   const created = await store.addEntry({ kind: 'method', title: 'old', body: 'b' })
   await store.removeEntry(created.entry.id)
   // Age the tombstone on disk: addEntry re-reads with `force`, so an in-memory
-  // edit would be discarded before pruning ever saw it.
+  // edit would be discarded before pruning ever saw it. The log is append-only, so
+  // the live row is the last line for that id.
   const file = path.join(root, 'memory.jsonl')
-  const lines = (await fs.readFile(file, 'utf8'))
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
-  const tomb = lines.find((entry) => entry.id === created.entry.id)
+  const rows = (await fs.readFile(file, 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  const tomb = [...rows].reverse().find((entry) => entry.id === created.entry.id)
   assert.equal(tomb.status, 'rejected')
   tomb.updatedAt = new Date(Date.now() - 10 * 86_400_000).toISOString()
-  await fs.writeFile(file, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`, 'utf8')
+  await fs.writeFile(file, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8')
   store.cache = null
 
   await store.addEntry({ kind: 'method', title: 'trigger save', body: 'b' })
@@ -372,8 +379,7 @@ test('touchEntry coalesces into one deferred write', async () => {
   await store.touchEntry([created.entry.id])
   assert.equal((await fs.stat(file)).mtimeMs, before, 'touch must not write immediately')
   await store.flushTouches()
-  const onDisk = JSON.parse((await fs.readFile(file, 'utf8')).trim())
-  assert.equal(onDisk.useCount, 1)
+  assert.equal((await onDiskEntry(root, created.entry.id)).useCount, 1)
 })
 
 test('pending touches survive a forced reload', async () => {
@@ -392,8 +398,7 @@ test('concurrent touches accumulate without losing increments', async () => {
   const created = await store.addEntry({ kind: 'method', title: 'b', body: 'b' })
   await Promise.all([store.touchEntry([created.entry.id]), store.touchEntry([created.entry.id]), store.touchEntry([created.entry.id])])
   await store.flushTouches()
-  const onDisk = JSON.parse((await fs.readFile(path.join(root, 'memory.jsonl'), 'utf8')).trim())
-  assert.equal(onDisk.useCount, 3)
+  assert.equal((await onDiskEntry(root, created.entry.id)).useCount, 3)
 })
 
 test('pruning entries also drops their vectors', async () => {
@@ -411,4 +416,89 @@ test('pruning entries also drops their vectors', async () => {
   const stats = await store.vectorStats()
   assert.equal(vectors.size, stats.covered, 'no orphan vectors may remain')
   for (const entry of active) assert.ok(vectors.has(entry.id))
+})
+
+test('memory.jsonl is appended to, not rewritten', async () => {
+  // Writing every stored entry as a full rewrite cost 18 MB of IO per save at the
+  // entry cap; the append log only needs the changed rows.
+  const { root, store } = await tempStore()
+  const file = path.join(root, 'memory.jsonl')
+  for (let i = 0; i < 5; i += 1) await store.addEntry({ kind: 'method', title: `t${i}`, body: 'b' })
+  const before = (await fs.stat(file)).size
+  await store.addEntry({ kind: 'method', title: 'extra', body: 'b' })
+  const after = (await fs.stat(file)).size
+  assert.ok(after > before, 'the log must grow by an append')
+  assert.ok(after - before < 2048, `one entry appended ${after - before} bytes`)
+})
+
+test('a re-edited entry is appended and the newest row wins', async () => {
+  const { root, store } = await tempStore()
+  const created = await store.addEntry({ kind: 'method', title: 'v1', body: 'b' })
+  await store.updateEntry(created.entry.id, { title: 'v2' })
+  const rows = (await fs.readFile(path.join(root, 'memory.jsonl'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+  const forId = rows.filter((row) => row.id === created.entry.id)
+  assert.ok(forId.length >= 2, 'the rewrite is an extra row')
+  assert.equal(forId[forId.length - 1].title, 'v2')
+  const loaded = await store.load({ force: true })
+  assert.equal(loaded.find((entry) => entry.id === created.entry.id).title, 'v2')
+})
+
+test('evicted entries leave a tombstone instead of forcing a rewrite', async () => {
+  // At the entry cap every store evicts something. Compacting on each eviction
+  // meant rewriting the whole file per saved entry.
+  const { root, store } = await tempStore({ maxEntries: 50, maxArchivedEntries: 0 })
+  for (let i = 0; i < 50; i += 1) await store.addEntry({ kind: 'method', title: `k${i}-${Math.random().toString(36).slice(2, 9)}`, body: 'x'.repeat(2000) })
+  const file = path.join(root, 'memory.jsonl')
+  const before = (await fs.stat(file)).size
+  await store.addEntry({ kind: 'method', title: `new-${Math.random().toString(36).slice(2, 9)}`, body: 'x'.repeat(2000) })
+  const after = (await fs.stat(file)).size
+  assert.ok(after > before, 'an eviction must append a tombstone, not rewrite')
+  const loaded = await store.load({ force: true })
+  assert.ok(loaded.length <= 50)
+  // The tombstoned id must not come back.
+  const rows = (await fs.readFile(file, 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  for (const row of rows.filter((item) => item.deleted)) {
+    assert.equal(loaded.some((entry) => entry.id === row.id), false)
+  }
+})
+
+test('addEntries renders the views once for the whole batch', async () => {
+  const { root, store } = await tempStore()
+  await store.addEntry({ kind: 'method', title: 'seed', body: 'b' })
+  const viewDir = path.join(root, 'MEMORY')
+  const stamp = async () => {
+    const out = {}
+    for (const name of await fs.readdir(viewDir)) out[name] = (await fs.stat(path.join(viewDir, name))).mtimeMs
+    return out
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const before = await stamp()
+  await store.addEntries([
+    { kind: 'method', title: 'batch-a', body: 'b' },
+    { kind: 'lesson', title: 'batch-b', body: 'b' },
+    { kind: 'knowledge', title: 'batch-c', body: 'b' },
+  ])
+  const after = await stamp()
+  assert.notDeepEqual(after, before, 'views must be refreshed after the batch')
+  const index = await fs.readFile(path.join(viewDir, 'INDEX.md'), 'utf8')
+  assert.match(index, /batch-a/)
+  assert.match(index, /batch-c/)
+})
+
+test('render is a no-op when nothing the views show changed', async () => {
+  const { root, store } = await tempStore()
+  await store.addEntry({ kind: 'method', title: 'stable', body: 'b' })
+  const viewDir = path.join(root, 'MEMORY')
+  const stamp = async () => {
+    const out = {}
+    for (const name of await fs.readdir(viewDir)) out[name] = (await fs.stat(path.join(viewDir, name))).mtimeMs
+    return out
+  }
+  const before = await stamp()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await store.render()
+  assert.deepEqual(await stamp(), before)
 })
