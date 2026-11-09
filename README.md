@@ -286,6 +286,7 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
 ```
 
 `memory.jsonl` 是唯一事实来源，其余 Markdown 均为由其渲染的只读视图，可随时重建。
+它是追加日志：同一 `id` 多行以末行为准，删除写墓碑行；行数超过活跃条目的两倍时自动压实。
 `vectors.jsonl` 采用追加写，重复 id 以最后一行为准；当追加行数超过活跃向量数的两倍时
 自动压实一次。`state/` 记录每个会话已提炼到哪一回合，用于补提漏掉的回合。
 
