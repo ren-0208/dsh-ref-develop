@@ -12,6 +12,7 @@
   memory.jsonl                  权威数据：一行一个条目
   vectors.jsonl                 可选向量索引：一行 {id, sig, v}；删除即回到纯关键词召回
   store.json                    存储版本与元信息 {"version":2}
+  state/<id>.json                每会话的提炼游标（lastConsolidatedTurn）
   memory.jsonl.lock             写入时的跨进程锁（短命，正常不残留）
   MEMORY/
     INDEX.md                    总表 + 最近更新（生成）
@@ -120,7 +121,11 @@ strength = confidence × 0.5^(ageDays / halfLifeDays)
 
 规则：
 
+- 写入是**追加式**的：新向量追加到文件末尾，不重写整个索引。同一 `id` 可出现多行，
+  读取时**以最后一行为准**。
+- 追加行数超过活跃向量数的两倍（且至少 512 行）时自动压实一次，丢弃历史行。
 - 条目被新增以外的任何变更（合并、编辑、软删除、硬删除）都会**立即删除对应向量**，等待后台重算。
+  删除是重写而非追加，因为过期向量参与排序会给出错误相似度。
 - 指向已不存在条目的记录在保存时同时从磁盘与内存中清除。
 - 整个文件可随时删除或 `POST /growth-note/api/embeddings {op:'clear'}` 清空，记忆不受影响；
   下次写入或 `op:'reindex'` 时重建。

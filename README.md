@@ -200,6 +200,8 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
 - 向量存于记忆库根目录的 `vectors.jsonl`（base64 编码的 Float32），与 `memory.jsonl` 完全分离：
   删掉索引文件即可回到纯关键词模式，记忆本身不受影响。
 - 条目被修改、合并或删除时，其向量立即失效并在后台重算；更换模型后旧向量自动视为过期。
+- 写入为追加式：每次只追加新向量行，不重写整个索引；追加行数超过活跃向量数的两倍时自动压实。
+- 请求带 15 秒超时。服务无响应时返回空向量并退化为关键词召回，不会阻塞后续索引。
 - 索引重建：设置页「重建索引」按钮、`/growth reindex`，或 `POST /growth-note/api/embeddings`（`op=reindex|clear`）。
 
 设计上预留了跨会话检索的接口（见 `docs/DESIGN.md`「向量检索与 RAG 接口」）：嵌入提供者是可替换的，
@@ -272,6 +274,7 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
   memory.jsonl         权威数据：一行一条目（含证据、置信度、状态）
   vectors.jsonl        可选向量索引：一行 {id, sig, v}（base64 向量），可随时删除重建
   store.json           存储版本与元信息
+  state/<id>.json      每会话的提炼游标（lastConsolidatedTurn）
   MEMORY/
     INDEX.md           总表与最近更新（生成）
     PLAYBOOK.md        方法、否决清单与状态（生成）
@@ -279,10 +282,12 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
     WP/INDEX.md        题目复盘（生成）
     PERSONA.md         用户画像（生成）
     SESSIONS.md        会话流水，一行一会话（追加）
-  sessions/<id>.md     每回合的原始笔记
+  sessions/<id>.md     每回合的原始笔记（保留最近 maxNoteTurns 个回合）
 ```
 
 `memory.jsonl` 是唯一事实来源，其余 Markdown 均为由其渲染的只读视图，可随时重建。
+`vectors.jsonl` 采用追加写，重复 id 以最后一行为准；当追加行数超过活跃向量数的两倍时
+自动压实一次。`state/` 记录每个会话已提炼到哪一回合，用于补提漏掉的回合。
 写入采用「临时文件 + rename」并加跨进程锁，避免多会话并发写入损坏文件。
 条目字段及「另一会话仅凭目录能否继续工作」的判断标准见 `docs/MEMORY-FORMAT.md`。
 
