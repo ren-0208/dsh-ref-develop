@@ -288,6 +288,9 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
 `memory.jsonl` 是唯一事实来源，其余 Markdown 均为由其渲染的只读视图，可随时重建。
 `vectors.jsonl` 采用追加写，重复 id 以最后一行为准；当追加行数超过活跃向量数的两倍时
 自动压实一次。`state/` 记录每个会话已提炼到哪一回合，用于补提漏掉的回合。
+
+提炼按**最老优先**消化待处理回合，游标推进到本批实际覆盖的最后一个回合（而不是「当前回合」），
+因此中断或漏触发不会跳过中间的回合；积压会分多次提炼逐步排完。
 写入采用「临时文件 + rename」并加跨进程锁，避免多会话并发写入损坏文件。
 条目字段及「另一会话仅凭目录能否继续工作」的判断标准见 `docs/MEMORY-FORMAT.md`。
 
