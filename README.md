@@ -200,6 +200,8 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
 - 向量存于记忆库根目录的 `vectors.jsonl`（base64 编码的 Float32），与 `memory.jsonl` 完全分离：
   删掉索引文件即可回到纯关键词模式，记忆本身不受影响。
 - 条目被修改、合并或删除时，其向量立即失效并在后台重算；更换模型后旧向量自动视为过期。
+- 写入为追加式：每次只追加新向量行，不重写整个索引；追加行数超过活跃向量数的两倍时自动压实。
+- 请求带 15 秒超时。服务无响应时返回空向量并退化为关键词召回，不会阻塞后续索引。
 - 索引重建：设置页「重建索引」按钮、`/growth reindex`，或 `POST /growth-note/api/embeddings`（`op=reindex|clear`）。
 
 设计上预留了跨会话检索的接口（见 `docs/DESIGN.md`「向量检索与 RAG 接口」）：嵌入提供者是可替换的，
@@ -214,7 +216,8 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
 - **各学科题目**（CTF、课程作业、专业资格题、面试题）→ `wp`，
   要求写明「题目 → 关键一步 → 弯路 → 可复用产物」（`meta.platform` / `meta.category`）
 - **解决问题的方法与命令** → `method`（`meta.appliesTo` 记录适用环境）
-- **已尝试且失败的做法及原因**（否决清单）→ `lesson`；同一教训累计出现 3 次后自动升级为 `method`
+- **已尝试且失败的做法及原因**（否决清单）→ `lesson`；同一教训被独立重现 3 次后自动升级为 `method`
+  （「重现」指再次从会话中提炼到同一条，而不只是被 `growth_recall` 查到）
 - **项目现状与下一步** → `state`（`meta.project` / `meta.status`）
 - **对使用者的个性化适配** → `preference`（需开启）
 
@@ -223,7 +226,9 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
 1. 每个回合结束时，将本回合的「诉求 / 结论 / 调用的工具」写成一条会话笔记，
    追加至 `sessions/<会话id>.md`（不调用模型，成本为零，即使后续失败也能留档）。
 2. 每 `consolidateEveryTurns`（默认 6）个回合，使用**当前会话的模型**将最近若干条笔记提炼为最多 8 条候选。
-3. 候选逐条校验：`kind` 合法、标题非空、引用的原文片段可在对话中找到。
+3. 候选逐条校验：`kind` 合法、标题非空、引用的原文片段可在**原始会话事件**中找到。
+   校验对照的是本轮原始事件，而不是摘要后的笔记——笔记有 400 字窗口与长度上限，
+   拿它当依据会把忠实引用误判成编造。
    无法找到的记为 `verified: false` 且置信度减半；条目仍可保留，但衰减更快。
 4. 通过校验的条目与库中已有条目比对：
    - 同一 key，或标题相似度 ≥ `dedupeThreshold` → 合并（拼接正文、提高置信度、追加证据）；
@@ -244,12 +249,15 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
 | `autoSummarize` | `true` | 是否调用模型提炼条目 |
 | `consolidateEveryTurns` | `6` | 每多少回合提炼一次 |
 | `promptBudgetChars` | `1800` | 注入提示词的摘要字数上限 |
-| `maxEntries` | `3000` | 条目上限（超限按强度淘汰，画像与状态类保留） |
+| `maxEntries` | `3000` | 活跃条目上限（超限按强度淘汰，画像与状态类保留） |
+| `maxNoteTurns` | `200` | 每个会话保留多少回合的笔记，更早的在写入时轮转丢弃 |
+| `archiveRetentionDays` | `30` | 软删除/被取代条目保留天数，超期的在下次保存时丢弃 |
+| `maxArchivedEntries` | `300` | 同时保留的归档条目上限 |
 | `sessionNotesPerConsolidation` | `6` | 每次提炼读取最近几条笔记 |
 | `halfLifeDays` | `30` | 强度衰减半衰期 |
 | `minConfidence` | `0.35` | 低于该置信度的条目不再进入召回候选 |
 | `dedupeThreshold` | `0.7` | 标题相似度达到该值才合并 |
-| `promoteLessonAfter` | `3` | 同一教训出现多少次后升级为方法 |
+| `promoteLessonAfter` | `3` | 同一教训被独立重现多少次后升级为方法（只看重现次数，不看被召回次数） |
 | `embeddingProvider` | `none` | 向量检索提供者：`none` 仅关键词 / `openai` 兼容 `/embeddings` 接口 |
 | `embeddingModel` | `""` | 嵌入模型名（如 `text-embedding-3-small`） |
 | `embeddingBaseUrl` | `""` | 嵌入服务地址，留空使用 `https://api.openai.com/v1` |
@@ -266,6 +274,7 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
   memory.jsonl         权威数据：一行一条目（含证据、置信度、状态）
   vectors.jsonl        可选向量索引：一行 {id, sig, v}（base64 向量），可随时删除重建
   store.json           存储版本与元信息
+  state/<id>.json      每会话的提炼游标（lastConsolidatedTurn）
   MEMORY/
     INDEX.md           总表与最近更新（生成）
     PLAYBOOK.md        方法、否决清单与状态（生成）
@@ -273,10 +282,16 @@ growth_config(embeddingProvider="openai", embeddingModel="text-embedding-3-small
     WP/INDEX.md        题目复盘（生成）
     PERSONA.md         用户画像（生成）
     SESSIONS.md        会话流水，一行一会话（追加）
-  sessions/<id>.md     每回合的原始笔记
+  sessions/<id>.md     每回合的原始笔记（保留最近 maxNoteTurns 个回合）
 ```
 
 `memory.jsonl` 是唯一事实来源，其余 Markdown 均为由其渲染的只读视图，可随时重建。
+它是追加日志：同一 `id` 多行以末行为准，删除写墓碑行；行数超过活跃条目的两倍时自动压实。
+`vectors.jsonl` 采用追加写，重复 id 以最后一行为准；当追加行数超过活跃向量数的两倍时
+自动压实一次。`state/` 记录每个会话已提炼到哪一回合，用于补提漏掉的回合。
+
+提炼按**最老优先**消化待处理回合，游标推进到本批实际覆盖的最后一个回合（而不是「当前回合」），
+因此中断或漏触发不会跳过中间的回合；积压会分多次提炼逐步排完。
 写入采用「临时文件 + rename」并加跨进程锁，避免多会话并发写入损坏文件。
 条目字段及「另一会话仅凭目录能否继续工作」的判断标准见 `docs/MEMORY-FORMAT.md`。
 

@@ -12,6 +12,7 @@
   memory.jsonl                  权威数据：一行一个条目
   vectors.jsonl                 可选向量索引：一行 {id, sig, v}；删除即回到纯关键词召回
   store.json                    存储版本与元信息 {"version":2}
+  state/<id>.json                每会话的提炼游标（lastConsolidatedTurn）
   memory.jsonl.lock             写入时的跨进程锁（短命，正常不残留）
   MEMORY/
     INDEX.md                    总表 + 最近更新（生成）
@@ -25,7 +26,14 @@
 
 ## memory.jsonl
 
-一行一个 JSON 对象，无外层数组。追加与重写都走「临时文件 + rename」。
+一行一个 JSON 对象，无外层数组。
+
+`memory.jsonl` 是**追加日志**，不是快照：
+
+- 同一 `id` 可以出现多行，**以最后一行为准**；改写条目就是再追加一行。
+- 删除写一行墓碑 `{"id":"mg-…","deleted":true}`，读取时连同它之前同名行一起丢弃。
+- 行数超过活跃条目数两倍且至少 512 行时自动压实（全量重写，临时文件 + rename）。
+- 直接编辑本文件对调试仍可用，但要保证被改的那行在该 id 的**最后**。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -39,7 +47,8 @@
 | `confidence` | number | 0–1，默认 0.6；合并时 +0.05，上限 0.95 |
 | `status` | string | `active` / `superseded`（被新偏好取代）/ `rejected`（软删除） |
 | `verified` | boolean | 证据片段是否能在对话里找到 |
-| `useCount` | number | 被 `growth_recall` 命中的次数 |
+| `useCount` | number | 被 `growth_recall` 命中的次数（只影响强度，不参与教训升级） |
+| `corroborations` | number | 被独立重现的次数（新建=1，每次合并 +1）；旧数据缺该字段时按证据数补 |
 | `createdAt` / `updatedAt` | ISO string | 创建 / 最后修改 |
 | `lastUsedAt` | ISO string \| null | 最后一次命中 |
 | `source` | object \| null | `{sessionId, turn, cwd, url, title}`，线索出处 |
@@ -73,7 +82,10 @@
 4. 其余情况 → 新增条目。
 
 合并时：正文去重拼接（≤8000 字）、标签并集、置信度 +0.05、证据并集（≤8 条）、
-刷新 `updatedAt`，并把来源 id 记进 `mergedFrom`。
+`corroborations` +1，刷新 `updatedAt`，并把来源 id 记进 `mergedFrom`。
+
+`corroborations` 单独计数而不复用证据数，是因为证据有 8 条上限：撑满后再合并不会
+再增加信用，教训就会停在「永远差一次」的状态。
 
 ## 强度与淘汰
 
@@ -87,13 +99,26 @@ strength = confidence × 0.5^(ageDays / halfLifeDays)
 - `strength` 低于 `minConfidence`（默认 0.35）的条目不进入召回候选。
 - 超过 `maxEntries`（默认 3000）时按 `strength` 升序淘汰；
   `preference` 与 `state` 永不因条数被淘汰。
-- `status: rejected` 且超过 120 天未更新 → 物理删除。
+- 归档条目（`rejected` / `superseded`）受两道限制：超过 `archiveRetentionDays`（默认 30 天）
+  未更新则丢弃，且总数不超过 `maxArchivedEntries`（默认 300），超出按 `updatedAt` 保留较新的。
+  归档永远不会挤掉活跃条目。
 
 ## 教训升级为方法
 
-同一 `lesson` 被重复提及时 `confidence` 升高；当它的证据数或重复次数达到
-`promoteLessonAfter`（默认 3）时，自动生成一条 `method`：
-标题沿用、正文加前缀、`promotedFrom` 指向原 lesson。
+同一 `lesson` 被重新提炼到时 `corroborations` 递增；该计数达到 `promoteLessonAfter`
+（默认 3）时，自动生成一条 `method`：标题沿用、正文加前缀、`promotedFrom` 指向原 lesson。
+
+**不使用 `useCount`。** `useCount` 统计的是「被召回了几次」，而不是「又被踩到了几次」：
+反复查询同一教训不代表它被反复验证，拿它当升级依据会把常被引用的教训变成没人复核的方法。
+
+## 会话笔记轮转与提炼游标
+
+`sessions/<id>.md` 每个会话一个文件，保留最近 `maxNoteTurns`（默认 200）个回合，
+超出后在写入时原子重写并丢弃最老的段落。提炼时只读文件尾部，不再全量加载。
+
+`state/<id>.json` 记录该会话的 `lastConsolidatedTurn`。提炼按**最老优先**取待处理回合，
+并把游标推进到本批**实际覆盖的最后一个回合**，而不是当前回合——两者在存在积压时不相等，
+写成当前回合会把中间的回合永久跳过。没有游标的新会话从第一个回合开始。
 
 ## vectors.jsonl（可选）
 
@@ -107,7 +132,11 @@ strength = confidence × 0.5^(ageDays / halfLifeDays)
 
 规则：
 
+- 写入是**追加式**的：新向量追加到文件末尾，不重写整个索引。同一 `id` 可出现多行，
+  读取时**以最后一行为准**。
+- 追加行数超过活跃向量数的两倍（且至少 512 行）时自动压实一次，丢弃历史行。
 - 条目被新增以外的任何变更（合并、编辑、软删除、硬删除）都会**立即删除对应向量**，等待后台重算。
+  删除是重写而非追加，因为过期向量参与排序会给出错误相似度。
 - 指向已不存在条目的记录在保存时同时从磁盘与内存中清除。
 - 整个文件可随时删除或 `POST /growth-note/api/embeddings {op:'clear'}` 清空，记忆不受影响；
   下次写入或 `op:'reindex'` 时重建。

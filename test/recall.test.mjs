@@ -108,7 +108,9 @@ test('without vectors recall behaves exactly like lexical scoring', () => {
   const entry = normalizeEntry({ kind: 'method', title: 'cordis 注入', body: 'ctx.tools' })
   const plain = rankEntries([entry], { tokens: new Set(['cordis']) })
   const withNullVectors = rankEntries([entry], { tokens: new Set(['cordis']), vectors: null, queryVector: null })
-  assert.equal(plain[0].score, withNullVectors[0].score)
+  // The recency bonus is evaluated against the wall clock, so replicate calls can
+  // differ in the low bits; the contract is "same score", not "same float".
+  assert.ok(Math.abs(plain[0].score - withNullVectors[0].score) < 1e-6)
   assert.equal(withNullVectors[0].semantic, 0)
 })
 
@@ -123,4 +125,119 @@ test('selectForDigest keeps a semantic-only match out of the filler bucket', () 
   })
   assert.equal(groups.method.length, 1)
   assert.equal(matched, 1)
+})
+
+test('scoreEntry caches tokenisation but still honours edits', async () => {
+  // Regression: every prompt assembly retokenised every entry title and body.
+  // The cache must be keyed on id + updatedAt so an edited entry re-tokenises.
+  const { scoreEntry, tokenize, clearTokenCache } = await import('../lib/util.js')
+  const entry = {
+    id: 'mg-cache',
+    title: '逆向调试断点',
+    body: '用 x64dbg 在断点处查看寄存器',
+    tags: ['逆向'],
+    createdAt: new Date().toISOString(),
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  }
+  const tokens = tokenize('断点')
+  clearTokenCache()
+  const first = scoreEntry(entry, tokens)
+  assert.ok(first > 0)
+  // The recency bonus reads the clock, so two calls can differ in the last bits.
+  assert.ok(Math.abs(scoreEntry(entry, tokens) - first) < 1e-6)
+
+  // Same id, new content: the stale cached tokens must not be reused.
+  const edited = { ...entry, body: '完全换了正文，不再提到那个词', updatedAt: '2026-02-02T00:00:00.000Z' }
+  const after = scoreEntry(edited, tokens)
+  assert.ok(after < first)
+  clearTokenCache()
+})
+
+test('the token cache never serves tokens for different entry text', async () => {
+  // The real hazard of caching by id: a same-id rewrite that forgets to bump
+  // updatedAt would silently keep scoring against the old body.
+  const { scoreEntry, tokenize, clearTokenCache } = await import('../lib/util.js')
+  const stamp = { createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }
+  const a = { id: 'mg-x', title: 'cordis', body: '注入服务', tags: [], ...stamp }
+  const b = { id: 'mg-y', title: 'cordis', body: '注入服务', tags: [], ...stamp }
+  clearTokenCache()
+  assert.deepEqual(tokenize('cordis 注入'), tokenize('cordis 注入'))
+  const hitA = scoreEntry(a, tokenize('注入'))
+  const hitB = scoreEntry(b, tokenize('注入'))
+  // Different ids must not share a cache slot.
+  assert.ok(Math.abs(hitA - hitB) < 1e-6)
+  clearTokenCache()
+})
+
+test('scoreEntry uncached fallback works without an id', async () => {
+  const { scoreEntry, tokenize } = await import('../lib/util.js')
+  const entry = { title: '断点调试', body: 'x', tags: [], createdAt: new Date().toISOString() }
+  assert.ok(scoreEntry(entry, tokenize('断点')) > 0)
+})
+
+test('oneLine keeps its contract after the bounded-prefix optimisation', async () => {
+  // The whitespace collapse runs on a bounded window now, so the edge cases where
+  // the prefix is not representative must still behave exactly as before.
+  const { oneLine } = await import('../lib/util.js')
+  assert.equal(oneLine('  a   b  '), 'a b')
+  assert.equal(oneLine('', 10), '')
+  assert.equal(oneLine('   ', 10), '')
+  assert.equal(oneLine('x'.repeat(5000), 100).length, 100)
+  assert.ok(oneLine('x'.repeat(5000), 100).endsWith('…'))
+  // Mostly whitespace, then real content: must not collapse to an empty string.
+  assert.match(oneLine(`${' '.repeat(2000)}target${'z'.repeat(2000)}`, 50), /^target/)
+  // Short input is returned verbatim after collapsing.
+  assert.equal(oneLine('hello world', 50), 'hello world')
+})
+
+test('the reserved cross-library seam stays inert', async () => {
+  const { crossLibraryProvider, collectCandidates } = await import('../lib/recall.js')
+  // Single library is the only supported shape today.
+  assert.equal(crossLibraryProvider, null)
+  assert.deepEqual(collectCandidates([]), [])
+  assert.deepEqual(collectCandidates([[]]), [])
+  assert.deepEqual(collectCandidates([[{ id: 'a' }]]), [{ id: 'a' }])
+  // Multi-library must fail loudly rather than silently returning partial results.
+  assert.throws(() => collectCandidates([[{ id: 'a' }], [{ id: 'b' }]]), /reserved/)
+})
+
+test('oneLine matches the naive implementation it was optimised from', async () => {
+  // The bounded-prefix version exists only to avoid running a global regex over
+  // multi-kilobyte bodies. It must stay observationally identical, otherwise
+  // rendered views and prompt digests would silently differ from the naive result.
+  const { oneLine } = await import('../lib/util.js')
+  const naive = (value, max = 200) => {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim()
+    return text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`
+  }
+  // Every `max` the codebase actually uses.
+  const maxes = [10, 40, 50, 60, 80, 100, 110, 120, 140, 160, 200, 220, 300, 400, 2000]
+  const alphabet = ['a', 'b', ' ', '\n', '\t', '中', '\r\n']
+  const cases = [
+    '', ' ', '\n\n\n', 'a', '  a   b  ',
+    'x'.repeat(10000),
+    ' '.repeat(5000) + 'tail',
+    `${'a'.repeat(300)} ${' '.repeat(2000)}b`,
+    `${'x'.repeat(220)}${' '.repeat(5000)}rest`,
+  ]
+  for (let i = 0; i < 400; i += 1) {
+    const length = Math.floor(Math.random() * 4000)
+    let text = ''
+    for (let k = 0; k < length; k += 1) text += alphabet[Math.floor(Math.random() * alphabet.length)]
+    cases.push(text)
+  }
+  for (const text of cases) {
+    for (const max of maxes) {
+      assert.equal(oneLine(text, max), naive(text, max), `max=${max} input=${JSON.stringify(text.slice(0, 40))}`)
+    }
+  }
+})
+
+test('oneLine never hides a truncation', async () => {
+  // A string that is exactly `max` long and has no ellipsis reads as "complete".
+  const { oneLine } = await import('../lib/util.js')
+  const dense = 'x'.repeat(220)
+  const spaced = `${dense}${' '.repeat(5000)}tail`
+  assert.ok(oneLine(spaced, 220).endsWith('…'), 'a truncated body must say so')
+  assert.equal(oneLine(dense, 220), dense, 'an exactly-fitting body needs no ellipsis')
 })

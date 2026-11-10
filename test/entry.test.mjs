@@ -78,3 +78,33 @@ test('lessonPromotion produces a method only after corroboration and only once',
   assert.equal(lessonPromotion(lesson, { threshold: 3 }), null)
   assert.equal(lessonPromotion(normalizeEntry({ kind: 'lesson', title: 'x' }), { threshold: 3 }), null)
 })
+
+test('lessonPromotion ignores useCount: being recalled is not being corroborated', () => {
+  // Regression: `useCount` is bumped by growth_recall. Counting it as
+  // corroboration promoted frequently-quoted lessons nobody re-verified.
+  const lesson = normalizeEntry({ kind: 'lesson', title: 'make 不可用', body: 'b' })
+  lesson.useCount = 99
+  assert.equal(lesson.corroborations, 0)
+  assert.equal(lessonPromotion(lesson, { threshold: 3 }), null)
+})
+
+test('mergeEntry accrues corroboration past the evidence cap', () => {
+  // Regression: corroboration used to be read from evidence.length, which is
+  // capped at MAX_EVIDENCE, so a capped entry stopped accruing credit entirely.
+  const target = normalizeEntry({ kind: 'lesson', title: 'make 不可用', body: 'b' })
+  target.corroborations = 1
+  for (let i = 0; i < 10; i += 1) {
+    const incoming = normalizeEntry({ kind: 'lesson', title: 'make 不可用', body: `b${i}`, evidence: [{ quote: `q${i}` }] })
+    mergeEntry(target, incoming)
+  }
+  assert.ok(target.evidence.length <= 8)
+  assert.equal(target.corroborations, 11)
+  assert.ok(lessonPromotion(target, { threshold: 3 }))
+})
+
+test('normalizeEntry seeds corroborations from legacy evidence', () => {
+  const legacy = normalizeEntry({ kind: 'lesson', title: 'x', evidence: [{ quote: 'a' }, { quote: 'b' }] })
+  assert.equal(legacy.corroborations, 2)
+  const fresh = normalizeEntry({ kind: 'lesson', title: 'y' })
+  assert.equal(fresh.corroborations, 0)
+})

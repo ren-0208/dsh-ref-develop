@@ -148,3 +148,31 @@ test('embed() skips empty input and reports one vector per non-empty text', asyn
   assert.equal(vectors.length, 2)
   assert.deepEqual(await embedder.embed([]), [])
 })
+
+test('embed times out even when the fetch implementation never settles', async () => {
+  // Regression: a hung provider held `backfillVectors`'s per-store guard open
+  // forever, wedging vector indexing for the rest of the process. The signal
+  // alone is not enough — an implementation that ignores it must still return.
+  const embedder = createEmbedder(
+    { embeddingProvider: 'openai', embeddingModel: 'm', embeddingApiKey: 'k' },
+    { fetchImpl: () => new Promise(() => {}), timeoutMs: 1000 },
+  )
+  const started = Date.now()
+  const vectors = await embedder.embed(['x'])
+  const elapsed = Date.now() - started
+  assert.deepEqual(vectors, [])
+  assert.ok(elapsed < 3000, `embed returned after ${elapsed}ms`)
+})
+
+test('embed still returns vectors when the request resolves quickly', async () => {
+  const embedder = createEmbedder(
+    { embeddingProvider: 'openai', embeddingModel: 'm', embeddingApiKey: 'k' },
+    {
+      fetchImpl: async () => ({ ok: true, json: async () => ({ data: [{ index: 0, embedding: [3, 4] }] }) }),
+      timeoutMs: 1000,
+    },
+  )
+  const [vector] = await embedder.embed(['x'])
+  assert.equal(vector.length, 2)
+  assert.ok(Math.abs(Math.hypot(...vector) - 1) < 1e-6)
+})
